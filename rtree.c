@@ -1004,7 +1004,7 @@ static void copy_rand_point(int dims, double *point) {
     }
 }
 
-static bool search_iter(double *rect, const void *item, void *udata) {
+static bool search_iter(const double *rect, const void *item, void *udata) {
     (*(int*)udata)++;
     return true;
 }
@@ -1017,7 +1017,7 @@ struct single_ctx {
     struct rtree *rtree;
 };
 
-static bool single_iter(double *rect, const void *item, void *udata) {
+static bool single_iter(const double *rect, const void *item, void *udata) {
     struct single_ctx *ctx = udata;
     if (memcmp(rect, ctx->rect, 8*ctx->dims*2) == 0 && 
         *(int*)item == ctx->index) 

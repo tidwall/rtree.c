@@ -21,5 +21,7 @@ bool rtree_search(struct rtree *rtree, double *rect,
                                void *udata), 
                   void *udata);
 
+void rtree_set_allocator(void *(malloc)(size_t), void (*free)(void*));
+
 #endif
 
