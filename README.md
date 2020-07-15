@@ -1,16 +1,18 @@
 # rtree.c
 
-An R-tree implementation in C. 
+An [R-tree](https://en.wikipedia.org/wiki/R-tree) implementation in C. 
 
 <img src="cities.png" width="512" height="256" border="0" alt="Cities">
 
 ## Features
 
-- Supports any number of dimensions.
-- Generic interface with support for variable sized items.
+- Supports any number of dimensions
+- Generic interface with support for variable sized items
 - ANSI C (C99)
 - Supports custom allocators
-- Implements the [rbang](https://github.com/tidwall/rbang) variant.
+- Implements the [rbang](https://github.com/tidwall/rbang) variant
+- Robust, self-contained tests
+- Pretty darn good performance 🚀
 
 ## Example
 
@@ -98,6 +100,23 @@ rtree_count    # return number of items
 rtree_insert   # insert an item
 rtree_delete   # delete an item
 rtree_search   # search the rtree
+```
+
+## Testing and benchmarks
+
+The `rtree.c` file also contains robust testing and benchmark code.
+
+```sh
+$ cc -DRTREE_TEST rtree.c && ./a.out              # run tests
+$ cc -DRTREE_TEST -O3 rtree.c && BENCH=1 ./a.out  # run benchmarks
+```
+
+The following benchmarks were run on my 2019 Macbook Pro (2.4 GHz 8-Core Intel Core i9) using gcc-9. One million random (evenly distributed) rectangles are inserted, searched, and deleted.
+
+```
+insert   1000000 ops in 0.406 secs, 406 ns/op, 2462496 op/sec
+search   1000000 ops in 0.936 secs, 936 ns/op, 1068225 op/sec
+delete   1000000 ops in 0.901 secs, 901 ns/op, 1109395 op/sec
 ```
 
 ## License
