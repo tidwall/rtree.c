@@ -101,6 +101,12 @@ rtree_delete   # delete an item
 rtree_search   # search the rtree
 ```
 
+## Algorithms
+
+This implementation is a [variant](https://github.com/tidwall/rtree#algorithm) of the original paper:  
+[R-TREES. A DYNAMIC INDEX STRUCTURE FOR SPATIAL SEARCHING](http://www-db.deis.unibo.it/courses/SI-LS/papers/Gut84.pdf)
+
+
 ## Testing and benchmarks
 
 The `rtree.c` file also contains robust testing and benchmark code.
