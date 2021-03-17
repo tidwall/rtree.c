@@ -10,7 +10,6 @@ An [R-tree](https://en.wikipedia.org/wiki/R-tree) implementation in C.
 - Generic interface with support for variable sized items
 - ANSI C (C99)
 - Supports custom allocators
-- Implements the [rbang](https://github.com/tidwall/rbang) variant
 - Robust, self-contained tests
 - Pretty darn good performance 🚀
 
