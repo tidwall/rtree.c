@@ -103,7 +103,7 @@ rtree_search   # search the rtree
 
 ## Algorithms
 
-This implementation is a [variant](https://github.com/tidwall/rtree#algorithm) of the original paper:  
+This implementation is a [variant](https://github.com/tidwall/rtree#algorithms) of the original paper:  
 [R-TREES. A DYNAMIC INDEX STRUCTURE FOR SPATIAL SEARCHING](http://www-db.deis.unibo.it/courses/SI-LS/papers/Gut84.pdf)
 
 
