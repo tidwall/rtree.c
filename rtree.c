@@ -325,8 +325,8 @@ static struct node *node_split(struct rtree *rtree, struct node *node,
 
 // rect_enlarged_area calculates the enlarged area rect when unioned with other
 // rect, and it also calculates the total area of rect.
-static double rect_enlarged_area_d(double *rect, double *other, int dims, 
-                                   double *area_out)
+static double rect_enlarged_area(double *rect, double *other, int dims, 
+                                 double *area_out)
 {
     double enlarged = MAX(other[dims+0], rect[dims+0]) - MIN(other[0], rect[0]);
     double area = rect[dims+0] - rect[0];
@@ -337,79 +337,34 @@ static double rect_enlarged_area_d(double *rect, double *other, int dims,
     *area_out = area;
     return enlarged - area;
 }
-static double rect_enlarged_area_2(double *rect, double *other, int dims, 
-                                   double *area_out)
-{
-    double area = (rect[dims+0] - rect[0]) *
-                  (rect[dims+1] - rect[1]);
-    double enlarged = 
-        (MAX(other[dims+0], rect[dims+0]) - MIN(other[0], rect[0])) *
-        (MAX(other[dims+1], rect[dims+1]) - MIN(other[1], rect[1]));    
-    *area_out = area;
-    return enlarged - area;
-}
-static double rect_enlarged_area_3(double *rect, double *other, int dims, 
-                                   double *area_out)
-{
-    double enlarged = 
-        (MAX(other[dims+0], rect[dims+0]) - MIN(other[0], rect[0])) *
-        (MAX(other[dims+1], rect[dims+1]) - MIN(other[1], rect[1])) *
-        (MAX(other[dims+2], rect[dims+2]) - MIN(other[2], rect[2]));    
-    double area = (rect[dims+0] - rect[0]) *
-                  (rect[dims+1] - rect[1]) *
-                  (rect[dims+2] - rect[2]);
-    *area_out = area;
-    return enlarged - area;
-}
-static double rect_enlarged_area_4(double *rect, double *other, int dims, 
-                                   double *area_out)
-{
-    double enlarged = 
-        (MAX(other[dims+0], rect[dims+0]) - MIN(other[0], rect[0])) *
-        (MAX(other[dims+1], rect[dims+1]) - MIN(other[1], rect[1])) *
-        (MAX(other[dims+2], rect[dims+2]) - MIN(other[2], rect[2])) *
-        (MAX(other[dims+3], rect[dims+3]) - MIN(other[3], rect[3]));    
-    double area = (rect[dims+0] - rect[0]) *
-                  (rect[dims+1] - rect[1]) *
-                  (rect[dims+2] - rect[2]) *
-                  (rect[dims+3] - rect[3]);
-    *area_out = area;
-    return enlarged - area;
-}
 
-// subtree returns the best candidate for inserting a rectangle. It
+
+// choos_subtree returns the best candidate for inserting a rectangle. It
 // searches for the rectangle which requires the least enlargement. When two
 // candidate enlargments are equal, the one with the smallest area wins.
-#define FN_SUBTREE(fn_subtree, fn_rect_enlarged_area) \
-static int \
-fn_subtree(double *rects, int nrects, double *rect, int dims) { \
-    double *crect = rects; \
-    int j = 0; \
-    double j_area; \
-    double j_enlargement = fn_rect_enlarged_area(crect, rect, dims, &j_area); \
-    for (int i = 1; i < nrects; i++) { \
-        crect += dims*2; \
-        double area; \
-        double enlargement = fn_rect_enlarged_area(crect, rect, dims, &area); \
-        if (enlargement > j_enlargement) { \
-            continue; \
-        } \
-        if (enlargement == j_enlargement) { \
-            if (area > j_area) { \
-                continue; \
-            } \
-        } \
-        j = i; \
-        j_enlargement = enlargement; \
-        j_area = area; \
-    } \
-    return j; \
+static int choos_subtree(double *rects, int nrects, double *rect, int dims) {
+    double *crect = rects;
+    int j = 0;
+    double j_area;
+    double j_enlargement = rect_enlarged_area(crect, rect, dims, &j_area);
+    for (int i = 1; i < nrects; i++) {
+        crect += dims*2;
+        double area;
+        double enlargement = rect_enlarged_area(crect, rect, dims, &area);
+        if (enlargement > j_enlargement) {
+            continue;
+        }
+        if (enlargement == j_enlargement) {
+            if (area > j_area) {
+                continue;
+            }
+        }
+        j = i;
+        j_enlargement = enlargement;
+        j_area = area;
+    }
+    return j;
 }
-
-FN_SUBTREE(subtree_d, rect_enlarged_area_d);
-FN_SUBTREE(subtree_2, rect_enlarged_area_2);
-FN_SUBTREE(subtree_3, rect_enlarged_area_3);
-FN_SUBTREE(subtree_4, rect_enlarged_area_4);
 
 // node_insert inserts an item into the node. If the node is a branch, then
 // a child node (subtree) is chosen until a leaf node is found.
@@ -423,13 +378,9 @@ static void node_insert(struct rtree *rtree, struct node *node, double *rect,
         return;
     }
     int dims = rtree->dims;
-    int index;
-    switch (rtree->dims) {
-    case 2:  index = subtree_2(node->rect, node->count, rect, dims); break;
-    case 3:  index = subtree_3(node->rect, node->count, rect, dims); break;
-    case 4:  index = subtree_4(node->rect, node->count, rect, dims); break;
-    default: index = subtree_d(node->rect, node->count, rect, dims);
-    }
+    
+    int index = choos_subtree(node->rect, node->count, rect, dims);
+    
     struct node *child = *node_at(rtree, node, index);
     double *child_rect = rect_at(rtree, node, index);
     node_insert(rtree, child, rect, item);
@@ -565,7 +516,7 @@ size_t rtree_count(struct rtree *rtree) {
     return rtree->count + rtree->reinsert_count;
 }
 
-static bool inter_d(double *rect, double *other, int dims) {
+static bool rect_intersects(double *rect, double *other, int dims) {
     if (rect[dims+0] < other[0] || rect[0] > other[dims+0]) {
         return false;
     }
@@ -576,61 +527,37 @@ static bool inter_d(double *rect, double *other, int dims) {
     }
     return true;
 }
-static bool inter_2(double *rect, double *other, int dims) {
-    return !(rect[dims+0] < other[0] || rect[0] > other[dims+0] ||
-             rect[dims+1] < other[1] || rect[1] > other[dims+1]);
-}
-static bool inter_3(double *rect, double *other, int dims) {
-    return !(rect[dims+0] < other[0] || rect[0] > other[dims+0] ||
-             rect[dims+1] < other[1] || rect[1] > other[dims+1] ||
-             rect[dims+2] < other[2] || rect[2] > other[dims+2]);
-}
-static bool inter_4(double *rect, double *other, int dims) {
-    return !(rect[dims+0] < other[0] || rect[0] > other[dims+0] ||
-             rect[dims+1] < other[1] || rect[1] > other[dims+1] ||
-             rect[dims+2] < other[2] || rect[2] > other[dims+2] ||
-             rect[dims+3] < other[3] || rect[3] > other[dims+3]);
-}
 
 
-// FN_SEARCH is a template macro that will generate a custom search function
-// for a specific dimensions.
-#define FN_SEARCH(fn_search, fn_inter) \
-static bool \
-fn_search(struct rtree *rtree, struct node *node, double *rect, \
-       bool (*iter)(const double *rect, const void *item, void *udata), \
-       void *udata) \
-{ \
-    int dims = rtree->dims; \
-    double *crect = node->rect; \
-    if (node->leaf) { \
-        for (int i = 0; i < node->count; i++) { \
-            if (fn_inter(rect, crect, dims)) { \
-                void *citem = item_at(rtree, node, i); \
-                if (!iter(crect, citem, udata)) { \
-                    return false; \
-                } \
-            } \
-            crect += dims*2; \
-        } \
-    } else { \
-        for (int i = 0; i < node->count; i++) { \
-            if (fn_inter(rect, crect, dims)) { \
-                struct node *cnode = *node_at(rtree, node, i); \
-                if (!fn_search(rtree, cnode, rect, iter, udata)) { \
-                    return false; \
-                } \
-            } \
-            crect += dims*2; \
-        } \
-    } \
-    return true; \
+static bool fn_search(struct rtree *rtree, struct node *node, double *rect,
+       bool (*iter)(const double *rect, const void *item, void *udata),
+       void *udata)
+{
+    int dims = rtree->dims;
+    double *crect = node->rect;
+    if (node->leaf) {
+        for (int i = 0; i < node->count; i++) {
+            if (rect_intersects(rect, crect, dims)) {
+                void *citem = item_at(rtree, node, i);
+                if (!iter(crect, citem, udata)) {
+                    return false;
+                }
+            }
+            crect += dims*2;
+        }
+    } else {
+        for (int i = 0; i < node->count; i++) {
+            if (rect_intersects(rect, crect, dims)) {
+                struct node *cnode = *node_at(rtree, node, i);
+                if (!fn_search(rtree, cnode, rect, iter, udata)) {
+                    return false;
+                }
+            }
+            crect += dims*2;
+        }
+    }
+    return true;
 }
-
-FN_SEARCH(search_d, inter_d);
-FN_SEARCH(search_2, inter_2);
-FN_SEARCH(search_3, inter_3);
-FN_SEARCH(search_4, inter_4);
 
 // search_reinsert searches the reinsert list.
 static bool search_reinsert(struct rtree *rtree, double *rect, 
@@ -642,7 +569,7 @@ static bool search_reinsert(struct rtree *rtree, double *rect,
     while (node) {
         for (int i = 0; i < node->count; i++) {
             double *crect = rect_at(rtree, node, i);
-            if (inter_d(rect, crect, rtree->dims)) {
+            if (rect_intersects(rect, crect, rtree->dims)) {
                 void *citem = item_at(rtree, node, i);
                 if (!iter(crect, citem, udata)) {
                     return false;
@@ -680,73 +607,61 @@ bool rtree_search(struct rtree *rtree, double *rect,
         }
     }
     if (rtree->root) {
-        switch (rtree->dims) {
-        case 2:  return search_2(rtree, rtree->root, rect, iter, udata);
-        case 3:  return search_3(rtree, rtree->root, rect, iter, udata);
-        case 4:  return search_4(rtree, rtree->root, rect, iter, udata);
-        default: return search_d(rtree, rtree->root, rect, iter, udata);
-        }
+        return fn_search(rtree, rtree->root, rect, iter, udata);
     }
     return true;
 }
 
-#define FN_NODE_DELETE(fn_node_delete, fn_inter) \
-static bool \
-fn_node_delete(struct rtree *rtree, struct node *node, double *rect, \
-               void *item) \
-{\
-    int dims = rtree->dims;\
-    double *crect = node->rect;\
-    if (node->leaf) {\
-        for (int i = 0; i < node->count; i++) {\
-            if (fn_inter(rect, crect, dims)) {\
-                void *citem = item_at(rtree, node, i);\
-                if (memcmp(citem, item, rtree->elsize) == 0) {\
-                    /* found the target item, delete it now */ \
-                    rect_copy(rtree, crect, \
-                            rect_at(rtree, node, node->count-1));\
-                    item_copy(rtree, citem, \
-                            item_at(rtree, node, node->count-1));\
-                    node->count--;\
-                    return true;\
-                }\
-            }\
-            crect += dims*2;\
-        }        \
-    } else {\
-        for (int i = 0; i < node->count; i++) {\
-            if (fn_inter(rect, crect, dims)) {\
-                struct node *cnode = *node_at(rtree, node, i);\
-                if (fn_node_delete(rtree, cnode, rect, item)) {\
-                    if (rtree->use_reinsert &&\
-                        cnode->count < rtree->min_items) \
-                    {\
-                        /* underflow */ \
-                        push_reinsert(rtree, cnode);\
-                        node_rect_data_copy(rtree, node, i, node, \
-                                            node->count-1);\
-                        node->count--;\
-                    } else if (!rtree->use_reinsert && cnode->count == 0) {\
-                        takeaway(rtree, cnode);\
-                        node_rect_data_copy(rtree, node, i, node, \
-                                            node->count-1);\
-                        node->count--;\
-                    } else {\
-                        rect_calc(rtree, cnode, crect);\
-                    } \
-                    return true; \
-                } \
-            } \
-            crect += dims*2; \
-        } \
-    } \
-    return false; \
+static bool node_delete(struct rtree *rtree, struct node *node, double *rect,
+                        void *item)
+{
+    int dims = rtree->dims;
+    double *crect = node->rect;
+    if (node->leaf) {
+        for (int i = 0; i < node->count; i++) {
+            if (rect_intersects(rect, crect, dims)) {
+                void *citem = item_at(rtree, node, i);
+                if (memcmp(citem, item, rtree->elsize) == 0) {
+                    /* found the target item, delete it now */ 
+                    rect_copy(rtree, crect, 
+                            rect_at(rtree, node, node->count-1));
+                    item_copy(rtree, citem, 
+                            item_at(rtree, node, node->count-1));
+                    node->count--;
+                    return true;
+                }
+            }
+            crect += dims*2;
+        }
+    } else {
+        for (int i = 0; i < node->count; i++) {
+            if (rect_intersects(rect, crect, dims)) {
+                struct node *cnode = *node_at(rtree, node, i);
+                if (node_delete(rtree, cnode, rect, item)) {
+                    if (rtree->use_reinsert &&
+                        cnode->count < rtree->min_items)
+                    {
+                        /* underflow */
+                        push_reinsert(rtree, cnode);
+                        node_rect_data_copy(rtree, node, i, node, 
+                                            node->count-1);
+                        node->count--;
+                    } else if (!rtree->use_reinsert && cnode->count == 0) {
+                        takeaway(rtree, cnode);
+                        node_rect_data_copy(rtree, node, i, node,
+                                            node->count-1);
+                        node->count--;
+                    } else {
+                        rect_calc(rtree, cnode, crect);
+                    }
+                    return true;
+                }
+            }
+            crect += dims*2;
+        }
+    }
+    return false;
 }
-
-FN_NODE_DELETE(node_delete_d, inter_d);
-FN_NODE_DELETE(node_delete_2, inter_2);
-FN_NODE_DELETE(node_delete_3, inter_3);
-FN_NODE_DELETE(node_delete_4, inter_4);
 
 // delete_from_reinsert searches the reinsert list for the target item.
 // Returns true if the item was found and deleted.
@@ -757,7 +672,7 @@ static bool delete_from_reinsert(struct rtree *rtree, double *rect,
     while (node) {
         for (int i = 0; i < node->count; i++) {
             double *crect = rect_at(rtree, node, i);
-            if (inter_d(rect, crect, rtree->dims)) { 
+            if (rect_intersects(rect, crect, rtree->dims)) { 
                 void *citem = item_at(rtree, node, i);
                 if (memcmp(item, citem, rtree->elsize) == 0) {
                     node_rect_data_copy(rtree, node, i, node, node->count-1);
@@ -787,13 +702,7 @@ bool rtree_delete(struct rtree *rtree, double *rect, void *item) {
     if (!rtree->root) {
         return false;
     }
-    bool deleted;
-    switch (rtree->dims) {
-    case 2:  deleted = node_delete_2(rtree, rtree->root, rect, item); break;
-    case 3:  deleted = node_delete_3(rtree, rtree->root, rect, item); break;
-    case 4:  deleted = node_delete_4(rtree, rtree->root, rect, item); break;
-    default: deleted = node_delete_d(rtree, rtree->root, rect, item);
-    }
+    bool deleted = node_delete(rtree, rtree->root, rect, item);
     if (!deleted) {
         return false;
     }
