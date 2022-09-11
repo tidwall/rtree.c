@@ -509,17 +509,13 @@ size_t rtree_count(struct rtree *rtree) {
 }
 
 static bool rect_intersects(double *rect, double *other, int dims) {
-    if (rect[dims+0] < other[0] || rect[0] > other[dims+0]) {
-        return false;
-    }
-    for (int i = 1; i < dims; i++) {
+    for (int i = 0; i < dims; i++) {
         if (rect[dims+i] < other[i] || rect[i] > other[dims+i]) {
             return false;
         }
     }
     return true;
 }
-
 
 static bool fn_search(struct rtree *rtree, struct node *node, double *rect,
        bool (*iter)(const double *rect, const void *item, void *udata),
