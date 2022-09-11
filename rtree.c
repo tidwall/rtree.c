@@ -16,11 +16,6 @@
 const int MAXITEMS = 64;      // 64 max items per node
 const int MINFILL = 10;      // 10% min fill
 
-const bool ALLOW_REINSERTS = true;
-const bool ORDER_BRANCHES = true;
-const bool ORDER_LEAVES = true;
-const bool QUICK_CHOOSER = false;
-
 static void *(*_malloc)(size_t) = NULL;
 static void (*_free)(void *) = NULL;
 
@@ -68,8 +63,6 @@ struct rtree {
     size_t count;
     struct node *root;
     double *rect;   
-
-    bool use_reinsert;
     struct node *reinsert;
     size_t reinsert_count;
 };
@@ -168,7 +161,6 @@ struct rtree *rtree_new(size_t elsize, int dims) {
         return NULL;
     }
     memset(rtree, 0, sizeof(struct rtree));
-    rtree->use_reinsert = ALLOW_REINSERTS;
     rtree->elsize = elsize;
     rtree->dims = dims;
     rtree->max_items = MAXITEMS;
@@ -342,7 +334,7 @@ static double rect_enlarged_area(double *rect, double *other, int dims,
 // choos_subtree returns the best candidate for inserting a rectangle. It
 // searches for the rectangle which requires the least enlargement. When two
 // candidate enlargments are equal, the one with the smallest area wins.
-static int choos_subtree(double *rects, int nrects, double *rect, int dims) {
+static int choose_subtree(double *rects, int nrects, double *rect, int dims) {
     double *crect = rects;
     int j = 0;
     double j_area;
@@ -379,7 +371,7 @@ static void node_insert(struct rtree *rtree, struct node *node, double *rect,
     }
     int dims = rtree->dims;
     
-    int index = choos_subtree(node->rect, node->count, rect, dims);
+    int index = choose_subtree(node->rect, node->count, rect, dims);
     
     struct node *child = *node_at(rtree, node, index);
     double *child_rect = rect_at(rtree, node, index);
@@ -638,17 +630,10 @@ static bool node_delete(struct rtree *rtree, struct node *node, double *rect,
             if (rect_intersects(rect, crect, dims)) {
                 struct node *cnode = *node_at(rtree, node, i);
                 if (node_delete(rtree, cnode, rect, item)) {
-                    if (rtree->use_reinsert &&
-                        cnode->count < rtree->min_items)
-                    {
+                    if (cnode->count < rtree->min_items) {
                         /* underflow */
                         push_reinsert(rtree, cnode);
                         node_rect_data_copy(rtree, node, i, node, 
-                                            node->count-1);
-                        node->count--;
-                    } else if (!rtree->use_reinsert && cnode->count == 0) {
-                        takeaway(rtree, cnode);
-                        node_rect_data_copy(rtree, node, i, node,
                                             node->count-1);
                         node->count--;
                     } else {
