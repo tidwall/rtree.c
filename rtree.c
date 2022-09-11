@@ -13,9 +13,13 @@
 #define MIN(a,b) ((a) < (b) ? (a) : (b))
 #define MAX(a,b) ((a) > (b) ? (a) : (b))
 
-#define ALLOW_REINSERTS
-#define MAXITEMS 32      // 32 max items per node
-#define MINFILL  20      // 20% min fill
+const int MAXITEMS = 64;      // 64 max items per node
+const int MINFILL = 10;      // 10% min fill
+
+const bool ALLOW_REINSERTS = true;
+const bool ORDER_BRANCHES = true;
+const bool ORDER_LEAVES = true;
+const bool QUICK_CHOOSER = false;
 
 static void *(*_malloc)(size_t) = NULL;
 static void (*_free)(void *) = NULL;
@@ -164,9 +168,7 @@ struct rtree *rtree_new(size_t elsize, int dims) {
         return NULL;
     }
     memset(rtree, 0, sizeof(struct rtree));
-#ifdef ALLOW_REINSERTS
-    rtree->use_reinsert = true;
-#endif
+    rtree->use_reinsert = ALLOW_REINSERTS;
     rtree->elsize = elsize;
     rtree->dims = dims;
     rtree->max_items = MAXITEMS;
@@ -825,7 +827,9 @@ bool rtree_delete(struct rtree *rtree, double *rect, void *item) {
 //==============================================================================
 #ifdef RTREE_TEST
 
+#pragma GCC diagnostic ignored "-Wpragmas"
 #pragma GCC diagnostic ignored "-Wextra"
+#pragma GCC diagnostic ignored "-Wcompound-token-split-by-macro"
 
 #ifdef CITIES
 #include "cities.xh"
@@ -1045,7 +1049,7 @@ static void test(int N, int dims) {
 #ifdef CITIES
     if (N ==0 && dims == 0) {
         use_cities = true;
-        N = sizeof(cities)/sizeof(int[2]);
+        N = sizeof(cities)/(sizeof(int)*2);
         dims = 2;
         while(!(rects = xmalloc(8*dims*2*N))){}
         assert(rects);
