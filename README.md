@@ -6,9 +6,9 @@ An [R-tree](https://en.wikipedia.org/wiki/R-tree) implementation in C.
 
 ## Features
 
-- [Generic interface](#generic_interface) for multiple dimensions and data types
+- [Generic interface](#generic-interface) for multiple dimensions and data types
 - Supports custom allocators
-- [Very fast](#testing_and_benchmarks) 🚀
+- [Very fast](#testing-and-benchmarks) 🚀
 
 ## Example
 
