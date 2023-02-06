@@ -14,6 +14,8 @@
 #define NUMTYPE double
 #define DIMS 2
 #define MAX_ENTRIES 64
+#define MIN_ENTRIES_PERCENTAGE 10
+#define FAST_CHOOSER 2  // 0 = off , 1 == fast, 2 == faster
 
 ////////////////////////////////
 
@@ -24,6 +26,8 @@
 
 #define MIN(a,b) ((a) < (b) ? (a) : (b))
 #define MAX(a,b) ((a) > (b) ? (a) : (b))
+
+#define MIN_ENTRIES ((MAX_ENTRIES) * (MIN_ENTRIES_PERCENTAGE) / 100 + 1)
 
 enum kind {
     LEAF = 1,
@@ -261,8 +265,8 @@ static struct node *node_split_largest_axis_edge_snap(struct rtree *tr,
     }
 
     // Make sure that both left and right nodes have at least
-    // two entries by moving items into underflowed nodes.
-    if (left->count < 2) {
+    // min_entries by moving items into underflowed nodes.
+    if (left->count < MIN_ENTRIES) {
         // reverse sort by min axis
         node_sort_by_axis(right, axis, true, false);
         while (left->count < 2) {
@@ -328,11 +332,26 @@ static int node_choose_least_enlargement(struct node *node, struct rect *ir) {
 
 static int node_choose_subtree(struct node *node, struct rect *ir) {
     // Take a quick look for the first node that contain the rect.
-    for (int i = 0; i < node->count; i++) {
-        if (rect_contains(&node->rects[i], ir)) {
-            return i;
+    if (FAST_CHOOSER == 1) {
+        int index = -1;
+        double narea;
+        for (int i = 0; i < node->count; i++) {
+            if (rect_contains(&node->rects[i], ir)) {
+                double area = rect_area(&node->rects[i]);
+                if (index == -1 || area < narea) {
+                    narea = area;
+                    index = i;
+                }
+            }
+        }
+    } else if (FAST_CHOOSER == 2) {
+        for (int i = 0; i < node->count; i++) {
+            if (rect_contains(&node->rects[i], ir)) {
+                return i;
+            }
         }
     }
+
     // Fallback to using che "choose least enlargment" algorithm.
     return node_choose_least_enlargement(node, ir);
 }
@@ -584,7 +603,7 @@ static void node_delete(struct rtree *tr, struct rect *nr, struct node *node,
             continue;
         }
         if (node->children[i]->count == 0) {
-            // underflow. remove node
+            // underflow. 
             node_free(tr, node->children[i]);
             memmove(&node->rects[i], &node->rects[i+1], 
                 (node->count-(i+1))*sizeof(struct rect));
@@ -617,7 +636,7 @@ static void _rtree_delete(struct rtree *tr, const NUMTYPE *min,
     memcpy(&rect.max[0], max?max:min, sizeof(NUMTYPE)*DIMS);
     struct item item;
     memcpy(&item.data, &data, sizeof(DATATYPE));
-    if (!tr->root || !rect_contains(&tr->rect, &rect)) {
+    if (!tr->root) {
         return;
     }
     bool removed = false;
@@ -643,6 +662,7 @@ static void _rtree_delete(struct rtree *tr, const NUMTYPE *min,
             tr->rect = node_rect_calc(tr->root);
         }
     }
+    
 }
 
 //////////////////
@@ -688,9 +708,6 @@ static void _rtree_check(struct rtree *tr) {
     rtree_check_order(tr);
     rtree_check_rects(tr);
 }
-
-
-
 
 static const double svg_scale = 20.0;
 static const char *strokes[] = { "black", "red", "green", "purple" };
