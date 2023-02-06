@@ -6,9 +6,9 @@ An [R-tree](https://en.wikipedia.org/wiki/R-tree) implementation in C.
 
 ## Features
 
-- Generic interface for multiple dimensions and data types
+- [Generic interface](#generic_interface) for multiple dimensions and data types
 - Supports custom allocators
-- Pretty darn good performance 🚀
+- [Very fast](#testing_and_benchmarks) 🚀
 
 ## Example
 
@@ -115,10 +115,6 @@ Please find the type parameters at the top of the `rtree.c` file:
 
 Change these to suit your needs, then modify the `rtree.h` file to match.
 
-## Algorithms
-
-This implementation is a custom [variant](https://github.com/tidwall/rtree#algorithms) of the original paper [R-TREES. A DYNAMIC INDEX STRUCTURE FOR SPATIAL SEARCHING](http://www-db.deis.unibo.it/courses/SI-LS/papers/Gut84.pdf). It was originally designed for [Tile38](https://github.com/tidwall/tile38) and is highly optimized.
-
 ## Testing and benchmarks
 
 The `tests.c` file contains tests and benchmarks.
@@ -139,6 +135,44 @@ search-10%     1000 ops in 0.051 secs, 51303 ns/op, 19492 op/sec
 delete         1000000 ops in 0.359 secs, 359 ns/op, 2788016 op/sec
 replace        1000000 ops in 0.548 secs, 548 ns/op, 1823769 op/sec
 ```
+
+## Algorithms
+
+This implementation is a variant of the original paper:  
+[R-TREES. A DYNAMIC INDEX STRUCTURE FOR SPATIAL SEARCHING](https://www.cs.princeton.edu/courses/archive/fall08/cos597B/papers/rtrees.pdf)
+
+### Inserting
+
+Similar to the original paper. From the root to the leaf, the rects which will incur the least enlargment are chosen. Ties go to rects with the smallest area. 
+
+Added to this implementation: when a rect does not incur any enlargement at all, it's chosen immediately and without further checks on other rects in the same node. Also added is all child rectangles in every node are ordered by their minimum x value. This can dramatically speed up searching for intersecting rectangles on most modern hardware.
+
+### Deleting
+
+A target rect is searched for from root to the leaf, and if found it's deleted. When there are no more child rects in a node, that node is immedately removed from the tree.
+
+### Searching
+
+Same as the original algorithm.
+
+### Splitting
+
+This is a custom algorithm. It attempts to minimize intensive operations such as pre-sorting the children and comparing overlaps & area sizes. The desire is to do simple single axis distance calculations each child only once, with a target 50/50 chance that the child might be moved in-memory.
+
+When a rect has reached it's max number of entries it's largest axis is calculated and the rect is split into two smaller rects, named `left` and `right`.
+Each child rects is then evaluated to determine which smaller rect it should be placed into.
+Two values, `min-dist` and `max-dist`, are calcuated for each child. 
+
+- `min-dist` is the distance from the parent's minumum value of it's largest axis to the child's minumum value of the parent largest axis.
+- `max-dist` is the distance from the parent's maximum value of it's largest axis to the child's maximum value of the parent largest axis.
+
+When the `min-dist` is less than `max-dist` then the child is placed into the `left` rect. 
+When the `max-dist` is less than `min-dist` then the child is placed into the `right` rect. 
+When the `min-dist` is equal to `max-dist` then the child is placed into an `equal` bucket until all of the children are evaluated.
+Each `equal` rect is then one-by-one placed in either `left` or `right`, whichever has less children.
+
+Finally, sort all the rects in the parent node of the split rect by their
+minimum x value.
 
 ## License
 
