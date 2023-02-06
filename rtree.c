@@ -49,22 +49,11 @@ struct node {
     };
 };
 
-struct group {
-    struct node **nodes;
-    int len, cap;
-};
-
-struct pool {
-    struct group leaves;
-    struct group branches;
-};
-
 struct rtree {
     size_t count;
     int height;
     struct rect rect;
     struct node *root; 
-    struct pool pool;
     void *(*malloc)(size_t);
     void (*free)(void *);
 };
@@ -83,77 +72,6 @@ static void node_free(struct rtree *tr, struct node *node) {
         }
     }
     tr->free(node);
-}
-
-static struct node *gimme_node(struct rtree *tr, struct group *group) {
-    if (group->len == 0) panic("out of nodes");
-    struct node *node = group->nodes[--group->len];
-    return node;
-}
-
-static struct node *gimme_leaf(struct rtree *tr) {
-    return gimme_node(tr, &tr->pool.leaves);
-}
-
-static struct node *gimme_branch(struct rtree *tr) {
-    return gimme_node(tr, &tr->pool.branches);
-}
-
-static bool grow_group(struct rtree *tr, struct group *group) {
-    int cap = group->cap?group->cap*2:1;
-    struct node **nodes = (struct node **)tr->malloc(sizeof(struct node*)*cap);
-    if (!nodes) {
-        return false;
-    }
-    memcpy(nodes, group->nodes, group->len*sizeof(struct node*));
-    tr->free(group->nodes);
-    group->nodes = nodes;
-    group->cap = cap;
-    return true;
-}
-
-static void release_pool(struct rtree *tr) {
-    for (int i = 0; i < tr->pool.leaves.len; i++) {
-        tr->free(tr->pool.leaves.nodes[i]);
-    }
-    tr->free(tr->pool.leaves.nodes);
-    for (int i = 0; i < tr->pool.branches.len; i++) {
-        tr->free(tr->pool.branches.nodes[i]);
-    }
-    tr->free(tr->pool.branches.nodes);
-    memset(&tr->pool, 0, sizeof(struct pool));
-}
-
-// fill_pool fills the node pool prior to inserting items. This ensures there
-// is enough memory before we begin doing things like splits and shadowing.
-// There needs to be at least four available leaf and N*2 branches
-// where N is equal to the height of the tree plus two.
-static bool fill_pool(struct rtree *tr) {
-    while (tr->pool.leaves.len < 4) {
-        if (tr->pool.leaves.len == tr->pool.leaves.cap) {
-            if (!grow_group(tr, &tr->pool.leaves)) {
-                return false;
-            }
-        }
-        struct node *leaf = node_new(tr, LEAF);
-        if (!leaf) {
-            return false;
-        }
-        tr->pool.leaves.nodes[tr->pool.leaves.len++] = leaf;
-    }
-    while (tr->pool.branches.len < tr->height*2+2) {
-        if (tr->pool.branches.len == tr->pool.branches.cap) {
-            if (!grow_group(tr, &tr->pool.branches)) {
-                return false;
-            }
-        }
-        struct node *branch = node_new(tr, BRANCH);
-        if (!branch) {
-            return false;
-        }
-        tr->pool.branches.nodes[tr->pool.branches.len++] = branch;
-    }
-    return true;
 }
 
 static void rect_expand(struct rect *rect, struct rect *other) {
@@ -328,7 +246,8 @@ static struct node *node_split_largest_axis_edge_snap(struct rtree *tr,
     struct rect *rect, struct node *left) 
 {
     int axis = rect_largest_axis(rect);
-    struct node *right = left->kind == LEAF ? gimme_leaf(tr) : gimme_branch(tr);
+    struct node *right = node_new(tr, left->kind);
+    if (!right) return NULL;
     for (int i = 0; i < left->count; i++) {
         double min_dist = (double)left->rects[i].min[axis] - (double)rect->min[axis];
         double max_dist = (double)rect->max[axis] - (double)left->rects[i].max[axis];
@@ -446,7 +365,8 @@ static int node_order_to_left(struct node *node, int index) {
     return index;
 }
 
-static void node_insert(struct rtree *tr, struct rect *nr, struct node *node, 
+// node_insert returns false if out of memory
+static bool node_insert(struct rtree *tr, struct rect *nr, struct node *node, 
     struct rect *ir, struct item item, bool *split, bool *grown)
 {
     *split = false;
@@ -454,7 +374,7 @@ static void node_insert(struct rtree *tr, struct rect *nr, struct node *node,
     if (node->kind == LEAF) {
         if (node->count == MAX_ENTRIES) {
             *split = true;
-            return;
+            return true;
         }
         int index = node_rsearch(node, ir->min[0]);
         memmove(&node->rects[index+1], &node->rects[index], 
@@ -465,20 +385,26 @@ static void node_insert(struct rtree *tr, struct rect *nr, struct node *node,
         node->items[index] = item;
         node->count++;
         *grown = !rect_contains(nr, ir);
-        return;
+        return true;
     }
 
     // Choose a subtree for inserting the rectangle.
     int index = node_choose_subtree(node, ir);
-    node_insert(tr, &node->rects[index], node->children[index], ir, item, 
-        split, grown);
+    if (!node_insert(tr, &node->rects[index], node->children[index], ir, item, 
+        split, grown))
+    {
+        return false;
+    }
     if (*split) {
         if (node->count == MAX_ENTRIES) {
-            return;
+            return true;
         }
         // split the child node
         struct node *left = node->children[index];
         struct node *right = node_split(tr, &node->rects[index], left);
+        if (!right) {
+            return false;
+        }
         node->rects[index] = node_rect_calc(left);
         memmove(&node->rects[index+2], &node->rects[index+1], 
             (node->count-(index+1))*sizeof(struct rect));
@@ -500,6 +426,7 @@ static void node_insert(struct rtree *tr, struct rect *nr, struct node *node,
         node_order_to_left(node, index);
         *grown = !rect_contains(nr, ir);
     }
+    return true;
 }
 
 static struct rtree *_rtree_new_with_allocator(void *(*cust_malloc)(size_t), 
@@ -529,21 +456,23 @@ static bool _rtree_insert(struct rtree *tr, const NUMTYPE *min,
     memcpy(&rect.max[0], max?max:min, sizeof(NUMTYPE)*DIMS);
     struct item item;
     memcpy(&item.data, &data, sizeof(DATATYPE));
-    if (!fill_pool(tr)) {
-        return false;
-    }
-    
     if (!tr->root) {
-        tr->root = gimme_leaf(tr);
+        struct node *new_root = node_new(tr, LEAF);
+        if (!new_root) return false;
+        tr->root = new_root;
         tr->rect = rect;
     }
     bool split = false;
     bool grown = false;
-    node_insert(tr, &tr->rect, tr->root, &rect, item, &split, &grown);
+    if (!node_insert(tr, &tr->rect, tr->root, &rect, item, &split, &grown)) {
+        return false;
+    }
     if (split) {
+        struct node *new_root = node_new(tr, BRANCH);
+        if (!new_root) return false;
         struct node *left = tr->root;
         struct node *right = node_split(tr, &tr->rect, left);
-        tr->root = gimme_branch(tr);
+        tr->root = new_root;
         tr->root->rects[0] = node_rect_calc(left);
         tr->root->rects[1] = node_rect_calc(right);
         tr->root->children[0] = left;
@@ -565,7 +494,6 @@ static void _rtree_free(struct rtree *tr) {
     if (tr->root) {
         node_free(tr, tr->root);
     }
-    release_pool(tr);
     tr->free(tr);
 }
 
