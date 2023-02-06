@@ -1,3 +1,4 @@
 *.dSYM
 a.out
 *.svg
+.vscode/

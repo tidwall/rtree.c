@@ -1,46 +1,48 @@
-// Copyright 2020 Joshua J Baker. All rights reserved.
-// Use of this source code is governed by an MIT-style
-// license that can be found in the LICENSE file.
-
-#include <stddef.h>
 #include <stdlib.h>
-#include <string.h>
-#include <math.h>
 #include <stdio.h>
+#include <string.h>
 #include <stdbool.h>
 #include "rtree.h"
 
-#define MIN(a,b) ((a) < (b) ? (a) : (b))
-#define MAX(a,b) ((a) > (b) ? (a) : (b))
+////////////////////////////////
 
-const int MAXITEMS = 64;      // 64 max items per node
-const int MINFILL = 10;      // 10% min fill
+#define DATATYPE void * 
+#define NUMTYPE double
+#define DIMS 2
+#define MAX_ENTRIES 64
 
-static void *(*_malloc)(size_t) = NULL;
-static void (*_free)(void *) = NULL;
-
-#define rtmalloc (_malloc?_malloc:malloc)
-#define rtfree (_free?_free:free)
-
-// rtree_set_allocator allows for configuring a custom allocator for
-// all rtree library operations. This function, if needed, should be called
-// only once at startup and a prior to calling rtree_new().
-void rtree_set_allocator(void *(malloc)(size_t), void (*free)(void*)) {
-    _malloc = malloc;
-    _free = free;
-}
+////////////////////////////////
 
 #define panic(_msg_) { \
     fprintf(stderr, "panic: %s (%s:%d)\n", (_msg_), __FILE__, __LINE__); \
     exit(1); \
 }
 
+#define MIN(a,b) ((a) < (b) ? (a) : (b))
+#define MAX(a,b) ((a) > (b) ? (a) : (b))
+
+enum kind {
+    LEAF = 1,
+    BRANCH = 2,
+};
+
+struct rect {
+    NUMTYPE min[DIMS];
+    NUMTYPE max[DIMS];
+};
+
+struct item {
+    DATATYPE data;
+};
+
 struct node {
-    bool leaf;
-    int count;
-    void *rect;
-    void *data;
-    struct node *next; // used in split reinsertions
+    enum kind kind;     // LEAF or BRANCH
+    int count;          // number of rects
+    struct rect rects[MAX_ENTRIES];
+    union {
+        struct node *children[MAX_ENTRIES];
+        struct item items[MAX_ENTRIES];
+    };
 };
 
 struct group {
@@ -54,710 +56,725 @@ struct pool {
 };
 
 struct rtree {
-    size_t elsize;
-    int dims;
-    int max_items;
-    int min_items;
-    int height;
-    struct pool pool;
     size_t count;
-    struct node *root;
-    double *rect;   
-    struct node *reinsert;
-    size_t reinsert_count;
+    int height;
+    struct rect rect;
+    struct node *root; 
+    struct pool pool;
+    void *(*malloc)(size_t);
+    void (*free)(void *);
 };
 
-// node_new returns a new internal rtree node. The allocation is oversized and
-// the rect and data (items and children) are allocated specifically for a
-// leaf or branch.
-static struct node *node_new(struct rtree *rtree, bool leaf){
-    size_t elsize = leaf?rtree->elsize:sizeof(struct node*);
-    size_t rectsz = 8 * rtree->dims * 2 * (rtree->max_items+1);
-    size_t datasz = elsize * (rtree->max_items+1);
-    size_t nodesz = sizeof(struct node) + rectsz + datasz;
-    struct node *node = rtmalloc(nodesz);
-    if (!node) {
-        return NULL;
-    }
-    node->leaf = leaf;
-    node->count = 0;
-    node->rect = ((char*)node)+sizeof(struct node);
-    node->data = ((char*)node->rect)+rectsz;
+static struct node *node_new(struct rtree *tr, enum kind kind) {
+    struct node *node = (struct node *)tr->malloc(sizeof(struct node));
+    memset(node, 0, sizeof(struct node));
+    node->kind = kind;
     return node;
 }
 
-// item_at returns a leaf item at index
-static void *item_at(struct rtree *rtree, struct node *node, int index) {
-    return ((char*)node->data) + rtree->elsize * index;
-}
-
-static void item_copy(struct rtree *rtree, void *item, void *from) {
-    memcpy(item, from, rtree->elsize);
-}
-
-// rect_at returns a node rect at index
-static double *rect_at(struct rtree *rtree, struct node *node, int index) {
-    return (void*)(((char*)node->rect) + (8 * rtree->dims * 2) * index);
-}
-static void rect_copy(struct rtree *rtree, double *rect, double *from) {
-    memcpy(rect, from, 8*rtree->dims*2);
-}
-
-static struct node **node_at(struct rtree *rtree, struct node *node, 
-                             int index) 
-{
-    if (rtree){}
-    return ((struct node**)node->data)+index;
-}
-static void node_copy(struct rtree *rtree, struct node **node, 
-                      struct node **from) 
-{
-    if (rtree){}
-    memcpy(node, from, sizeof(struct node*));
-}
-
-// node_rect_data_copy copies the rect and data from src into dst.
-// It's expected that dst and src are the same type of node (leaf or branch).
-static void node_rect_data_copy(struct rtree *rtree, 
-                                struct node *dst, int dst_index, 
-                                struct node *src, int src_index)
-{
-    rect_copy(rtree,
-              rect_at(rtree, dst, dst_index), 
-              rect_at(rtree, src, src_index));
-    if (dst->leaf) {
-        item_copy(rtree,
-                  item_at(rtree, dst, dst_index),
-                  item_at(rtree, src, src_index));
-    } else {
-        node_copy(rtree,
-                  node_at(rtree, dst, dst_index),
-                  node_at(rtree, src, src_index));
+static void node_free(struct rtree *tr, struct node *node) {
+    if (node->kind == BRANCH) {
+        for (int i = 0; i < node->count; i++) {
+            node_free(tr, node->children[i]);
+        }
     }
+    tr->free(node);
 }
 
-static void rect_expand(double *rect, double *other, int dims) {
-    rect[0] = MIN(rect[0], other[0]); 
-    rect[dims+0] = MAX(rect[dims+0], other[dims+0]);
-    for (int i = 1; i < dims; i++) {
-        rect[i] = MIN(rect[i], other[i]); 
-        rect[dims+i] = MAX(rect[dims+i], other[dims+i]);
-    }
-}
-
-// rect_calc calculates a the node mbr and puts result into rect.
-static void rect_calc(struct rtree *rtree, struct node *node, double *rect) {
-    rect_copy(rtree, rect, rect_at(rtree, node, 0));
-    for (int i = 1; i < node->count; i++) {
-        rect_expand(rect, rect_at(rtree, node, i), rtree->dims);
-    }
-}
-
-struct rtree *rtree_new(size_t elsize, int dims) {
-    if (dims < 1) panic("invalid dims");
-    if (elsize == 0) panic("elsize is zero");
-    struct rtree *rtree = rtmalloc(sizeof(struct rtree));
-    if (!rtree) {
-        return NULL;
-    }
-    memset(rtree, 0, sizeof(struct rtree));
-    rtree->elsize = elsize;
-    rtree->dims = dims;
-    rtree->max_items = MAXITEMS;
-    rtree->min_items = (rtree->max_items*MINFILL/100)+1;
-    rtree->rect = rtmalloc(8*dims*2);
-    if (!rtree->rect) {
-        rtfree(rtree);
-        return NULL;
-    }
-    return rtree;
-}
-
-static struct node *gimme_node(struct group *group) {
+static struct node *gimme_node(struct rtree *tr, struct group *group) {
     if (group->len == 0) panic("out of nodes");
-    return group->nodes[--group->len];
+    struct node *node = group->nodes[--group->len];
+    return node;
 }
 
-static struct node *gimme_leaf(struct rtree *rtree) {
-    return gimme_node(&rtree->pool.leaves);
+static struct node *gimme_leaf(struct rtree *tr) {
+    return gimme_node(tr, &tr->pool.leaves);
 }
 
-static struct node *gimme_branch(struct rtree *rtree) {
-    return gimme_node(&rtree->pool.branches);
+static struct node *gimme_branch(struct rtree *tr) {
+    return gimme_node(tr, &tr->pool.branches);
 }
 
-static bool grow_group(struct group *group) {
+static bool grow_group(struct rtree *tr, struct group *group) {
     int cap = group->cap?group->cap*2:1;
-    struct node **nodes = rtmalloc(sizeof(struct node*)*cap);
+    struct node **nodes = (struct node **)tr->malloc(sizeof(struct node*)*cap);
     if (!nodes) {
         return false;
     }
     memcpy(nodes, group->nodes, group->len*sizeof(struct node*));
-    rtfree(group->nodes);
+    tr->free(group->nodes);
     group->nodes = nodes;
     group->cap = cap;
     return true;
 }
 
-static void takeaway(struct rtree *rtree, struct node *node) {
-    const int MAXLEN = 32;
-    struct group *group;
-    if (node->leaf) {
-        group = &rtree->pool.leaves;
-    } else {
-        group = &rtree->pool.branches;
+static void release_pool(struct rtree *tr) {
+    for (int i = 0; i < tr->pool.leaves.len; i++) {
+        tr->free(tr->pool.leaves.nodes[i]);
     }
-    if (group->len == MAXLEN) {
-        rtfree(node);
-        return;
+    tr->free(tr->pool.leaves.nodes);
+    for (int i = 0; i < tr->pool.branches.len; i++) {
+        tr->free(tr->pool.branches.nodes[i]);
     }
-    if (group->len == group->cap) {
-        if (!grow_group(group)) {
-            rtfree(node);
-            return;
-        }
-    }
-    group->nodes[group->len++] = node;
+    tr->free(tr->pool.branches.nodes);
+    memset(&tr->pool, 0, sizeof(struct pool));
 }
 
 // fill_pool fills the node pool prior to inserting items. This ensures there
-// is enough memory before we begin doing to things like splits and tree
-// rebalancing. There needs to be at least two available leaf and N branches
-// where N is equal to the height of the tree plus one.
-static bool fill_pool(struct rtree *rtree) {
-    while (rtree->pool.leaves.len < 2) {
-        if (rtree->pool.leaves.len == rtree->pool.leaves.cap) {
-            if (!grow_group(&rtree->pool.leaves)) {
+// is enough memory before we begin doing things like splits and shadowing.
+// There needs to be at least four available leaf and N*2 branches
+// where N is equal to the height of the tree plus two.
+static bool fill_pool(struct rtree *tr) {
+    while (tr->pool.leaves.len < 4) {
+        if (tr->pool.leaves.len == tr->pool.leaves.cap) {
+            if (!grow_group(tr, &tr->pool.leaves)) {
                 return false;
             }
         }
-        struct node *leaf = node_new(rtree, true);
+        struct node *leaf = node_new(tr, LEAF);
         if (!leaf) {
             return false;
         }
-        rtree->pool.leaves.nodes[rtree->pool.leaves.len++] = leaf;
+        tr->pool.leaves.nodes[tr->pool.leaves.len++] = leaf;
     }
-    while (rtree->pool.branches.len < rtree->height+1) {
-        if (rtree->pool.branches.len == rtree->pool.branches.cap) {
-            if (!grow_group(&rtree->pool.branches)) {
+    while (tr->pool.branches.len < tr->height*2+2) {
+        if (tr->pool.branches.len == tr->pool.branches.cap) {
+            if (!grow_group(tr, &tr->pool.branches)) {
                 return false;
             }
         }
-        struct node *branch = node_new(rtree, false);
+        struct node *branch = node_new(tr, BRANCH);
         if (!branch) {
             return false;
         }
-        rtree->pool.branches.nodes[rtree->pool.branches.len++] = branch;
+        tr->pool.branches.nodes[tr->pool.branches.len++] = branch;
     }
     return true;
 }
 
-static int rect_largest_axis(double *rect, int dims) {
+static void rect_expand(struct rect *rect, struct rect *other) {
+    for (int i = 0; i < DIMS; i++) {
+        if (other->min[i] < rect->min[i]) rect->min[i] = other->min[i];
+        if (other->max[i] > rect->max[i]) rect->max[i] = other->max[i];
+    }
+}
+
+static double rect_area(struct rect *rect) {
+    double area = (double)(rect->max[0]) - (double)(rect->min[0]);
+    for (int i = 1; i < DIMS; i++) {
+        area *= (double)(rect->max[i]) - (double)(rect->min[i]);
+    }
+    return area;
+}
+
+// contains return true when other is 
+
+static bool rect_contains(struct rect *rect, struct rect *other) {
+    for (int i = 0; i < DIMS; i++) {
+        if (other->min[i] < rect->min[i] || other->max[i] > rect->max[i]) {
+            return false;
+        }
+    }
+    return true;
+}
+
+static bool rect_intersects(struct rect *rect, struct rect *other) {
+    for (int i = 0; i < DIMS; i++) {
+        if (other->min[i] > rect->max[i] || other->max[i] < rect->min[i]) {
+            return false;
+        }
+    }
+    return true;
+}
+
+
+static bool nums_equal(NUMTYPE a, NUMTYPE b) {
+    return !(a < b || a > b);
+}
+
+static bool rect_onedge(struct rect *rect, struct rect *other) {
+    for (int i = 0; i < DIMS; i++) {
+        if (nums_equal(rect->min[i], other->min[i])) {
+            return true;
+        }
+        if (nums_equal(rect->max[i], other->max[i])) {
+            return true;
+        }
+    }
+    return false;
+}
+
+static bool rect_equals(struct rect *rect, struct rect *other) {
+    for (int i = 0; i < DIMS; i++) {
+        if (!nums_equal(rect->min[i], other->min[i])) {
+            return false;
+        }
+        if (!nums_equal(rect->max[i], other->max[i])) {
+            return false;
+        }
+    }
+    return true;
+}
+
+// swap two rectanlges
+static void node_swap(struct node *node, int i, int j) {
+    struct rect tmp = node->rects[i];
+    node->rects[i] = node->rects[j];
+    node->rects[j] = tmp;
+    if (node->kind == LEAF) {
+        struct item tmp = node->items[i];
+        node->items[i] = node->items[j];
+        node->items[j] = tmp;
+    } else {
+        struct node *tmp = node->children[i];
+        node->children[i] = node->children[j];
+        node->children[j] = tmp;
+    }
+}
+
+static void node_qsort(struct node *node, int s, int e, int axis, bool rev, bool max) {
+    int nrects = e - s;
+    if (nrects < 2) {
+        return;
+    }
+    int left = 0;
+    int right = nrects-1;
+    int pivot = nrects / 2; // rand and mod not worth it
+    node_swap(node, s+pivot, s+right);
+    struct rect *rects = &node->rects[s];
+    if (!rev) {
+        if (!max) {
+            for (int i = 0; i < nrects; i++) {
+                if (rects[i].min[axis] < rects[right].min[axis]) {
+                    node_swap(node, s+i, s+left);
+                    left++;
+                }
+            }
+        } else {
+            for (int i = 0; i < nrects; i++) {
+                if (rects[i].max[axis] < rects[right].max[axis]) {
+                    node_swap(node, s+i, s+left);
+                    left++;
+                }
+            }
+        }
+    } else {
+        if (!max) {
+            for (int i = 0; i < nrects; i++) {
+                if (rects[right].min[axis] < rects[i].min[axis]) {
+                    node_swap(node, s+i, s+left);
+                    left++;
+                }
+            }
+        } else {
+            for (int i = 0; i < nrects; i++) {
+                if (rects[right].max[axis] < rects[i].max[axis]) {
+                    node_swap(node, s+i, s+left);
+                    left++;
+                }
+            }
+        }
+    }
+    node_swap(node, s+left, s+right);
+    node_qsort(node, s, s+left, axis, rev, max);
+    node_qsort(node, s+left+1, e, axis, rev, max);
+
+}
+
+// sort the node rectangles
+static void node_sort(struct node *node) {
+    node_qsort(node, 0, node->count, 0, false, false);
+}
+
+// sort the node rectangles by the axis. used during splits
+static void node_sort_by_axis(struct node *node, int axis, bool rev, bool max) {
+    node_qsort(node, 0, node->count, axis, rev, max);
+}
+
+static int rect_largest_axis(struct rect *rect) {
     int axis = 0;
-    double size = rect[dims+0]-rect[0];
-    for (int i = 1; i < dims; i++) {
-        double nsize = rect[dims+i]-rect[i];
-        if (nsize > size) {
+    double nlength = (double)rect->max[0] - (double)rect->min[0];
+    for (int i = 1; i < DIMS; i++) {
+        double length = (double)rect->max[i] - (double)rect->min[i];
+        if (length > nlength) {
+            nlength = length;
             axis = i;
-            size = nsize;
         }
     }
     return axis;
 }
 
-// node_split splits the node into two and returns the newly created node.
-// It uses the R!Tree (rbang-tree) algorithm, which is custom to this
-// R-tree implemention. 
-// For more information please visit https://github.com/tidwall/rbang
-static struct node *node_split(struct rtree *rtree, struct node *node, 
-                               double *rect)
+static void node_move_rect_at_index_into(struct node *from, int index, 
+    struct node *into)
 {
-    int dims = rtree->dims;
-    int axis = rect_largest_axis(rect, dims);
-    double axis_min = rect[axis];
-    double axis_max = rect[dims+axis];
-    struct node *right = node->leaf ? gimme_leaf(rtree) : gimme_branch(rtree);
-    right->count = 0;
-    struct node *equals = node->leaf ? gimme_leaf(rtree) : gimme_branch(rtree);
-    equals->count = 0;
-    for (int i = 0; i < node->count; i++) {
-        double *crect = rect_at(rtree, node, i); // child rect
-        double min_dist = crect[axis] - axis_min;
-        double max_dist = axis_max - crect[dims+axis];
+    into->rects[into->count] = from->rects[index];
+    from->rects[index] = from->rects[from->count-1];
+    if (from->kind == LEAF) {
+        into->items[into->count] = from->items[index];
+        from->items[index] = from->items[from->count-1];
+    } else {
+        into->children[into->count] = from->children[index];
+        from->children[index] = from->children[from->count-1];
+    }
+    from->count--;
+    into->count++;
+}
+
+static struct node *node_split_largest_axis_edge_snap(struct rtree *tr, 
+    struct rect *rect, struct node *left) 
+{
+    int axis = rect_largest_axis(rect);
+    struct node *right = left->kind == LEAF ? gimme_leaf(tr) : gimme_branch(tr);
+    for (int i = 0; i < left->count; i++) {
+        double min_dist = (double)left->rects[i].min[axis] - (double)rect->min[axis];
+        double max_dist = (double)rect->max[axis] - (double)left->rects[i].max[axis];
         if (min_dist < max_dist) {
-            // keep the child in the left node
-            continue;
-        }
-        if (min_dist > max_dist) {
-            // move child to right
-            node_rect_data_copy(rtree, right, right->count, node, i);
-            right->count++;
+            // stay left
         } else {
-            // move child to equals bucket and resolve ties below
-            node_rect_data_copy(rtree, equals, equals->count, node, i);
-            equals->count++;
-        }
-        node_rect_data_copy(rtree, node, i, node, node->count-1);
-        node->count--;
-        i--;
-    }
-    // resolve ties
-    for (int i = 0; i < equals->count; i++) {
-        if (node->count < right->count) {
-            node_rect_data_copy(rtree, node, node->count, equals, i);
-            node->count++;
-        } else {
-            node_rect_data_copy(rtree, right, right->count, equals, i);
-            right->count++;
+            // move to right
+            node_move_rect_at_index_into(left, i, right);
+            i--;
         }
     }
-    takeaway(rtree, equals);
+
+    // Make sure that both left and right nodes have at least
+    // two entries by moving items into underflowed nodes.
+    if (left->count < 2) {
+        // reverse sort by min axis
+        node_sort_by_axis(right, axis, true, false);
+        while (left->count < 2) {
+            node_move_rect_at_index_into(right, right->count-1, left);
+        }
+    } else if (right->count < 2) {
+        // reverse sort by max axis
+        node_sort_by_axis(left, axis, true, true);
+        while (right->count < 2) {
+            node_move_rect_at_index_into(left, left->count-1, right);
+        }
+    }
+    node_sort(right);
+    node_sort(left);
     return right;
 }
 
-// rect_enlarged_area calculates the enlarged area rect when unioned with other
-// rect, and it also calculates the total area of rect.
-static double rect_enlarged_area(double *rect, double *other, int dims, 
-                                 double *area_out)
+static struct node *node_split(struct rtree *tr, struct rect *r,
+    struct node *left)
 {
-    double enlarged = MAX(other[dims+0], rect[dims+0]) - MIN(other[0], rect[0]);
-    double area = rect[dims+0] - rect[0];
-    for (int i = 1; i < dims; i++) {
-        enlarged *= MAX(other[dims+i], rect[dims+i]) - MIN(other[i], rect[i]);
-        area *= rect[dims+i] - rect[i];
-    }
-    *area_out = area;
-    return enlarged - area;
+    return node_split_largest_axis_edge_snap(tr, r, left);
 }
 
+static int node_rsearch(struct node *node, NUMTYPE key) {
+    for (int i = 0; i < node->count; i++) {
+        if (!(node->rects[i].min[0] < key)) {
+            return i;
+        }
+    }
+    return node->count;
+}
 
-// choos_subtree returns the best candidate for inserting a rectangle. It
-// searches for the rectangle which requires the least enlargement. When two
-// candidate enlargments are equal, the one with the smallest area wins.
-static int choose_subtree(double *rects, int nrects, double *rect, int dims) {
-    double *crect = rects;
-    int j = 0;
-    double j_area;
-    double j_enlargement = rect_enlarged_area(crect, rect, dims, &j_area);
-    for (int i = 1; i < nrects; i++) {
-        crect += dims*2;
-        double area;
-        double enlargement = rect_enlarged_area(crect, rect, dims, &area);
-        if (enlargement > j_enlargement) {
-            continue;
+// unionedArea returns the area of two rects expanded
+static double rect_unioned_area(struct rect *rect, struct rect *other) {
+    double area = (double)MAX(rect->max[0], other->max[0]) - 
+                  (double)MIN(rect->min[0], other->min[0]);
+    for (int i = 1; i < DIMS; i++) {
+        area *= (double)MAX(rect->max[i], other->max[i]) - 
+                (double)MIN(rect->min[i], other->min[i]);
+    }
+    return area;
+}
+
+static int node_choose_least_enlargement(struct node *node, struct rect *ir) {
+    int j = -1;
+    double jenlargement = 0;
+    double jarea = 0;
+    for (int i = 0; i < node->count; i++) {
+        // calculate the enlarged area
+        double uarea = rect_unioned_area(&node->rects[i], ir);
+        double area = rect_area(&node->rects[i]);
+        double enlargement = uarea - area;
+        if (j == -1 || enlargement < jenlargement || 
+            (!(enlargement > jenlargement) && area < jarea)) 
+        {
+            j = i;
+            jenlargement = enlargement;
+            jarea = area;
         }
-        if (enlargement == j_enlargement) {
-            if (area > j_area) {
-                continue;
-            }
-        }
-        j = i;
-        j_enlargement = enlargement;
-        j_area = area;
     }
     return j;
 }
 
-// node_insert inserts an item into the node. If the node is a branch, then
-// a child node (subtree) is chosen until a leaf node is found.
-static void node_insert(struct rtree *rtree, struct node *node, double *rect, 
-                        void *item)
+static int node_choose_subtree(struct node *node, struct rect *ir) {
+    // Take a quick look for the first node that contain the rect.
+    for (int i = 0; i < node->count; i++) {
+        if (rect_contains(&node->rects[i], ir)) {
+            return i;
+        }
+    }
+    // Fallback to using che "choose least enlargment" algorithm.
+    return node_choose_least_enlargement(node, ir);
+}
+
+static struct rect node_rect_calc(struct node *node) {
+    struct rect rect = node->rects[0];
+    for (int i = 1; i < node->count; i++) {
+        rect_expand(&rect, &node->rects[i]);
+    }
+    return rect;
+}
+
+static int node_order_to_right(struct node *node, int index) {
+    while (index < node->count-1 && 
+        node->rects[index+1].min[0] < node->rects[index].min[0]) 
+    {
+        node_swap(node, index+1, index);
+        index++;
+    }
+    return index;
+}
+
+static int node_order_to_left(struct node *node, int index) {
+    while (index > 0 && node->rects[index].min[0] < 
+        node->rects[index-1].min[0])
+    {
+        node_swap(node,index, index-1);
+        index--;
+    }
+    return index;
+}
+
+static void node_insert(struct rtree *tr, struct rect *nr, struct node *node, 
+    struct rect *ir, struct item item, bool *split, bool *grown)
 {
-    if (node->leaf) {
-        rect_copy(rtree, rect_at(rtree, node, node->count), rect);
-        item_copy(rtree, item_at(rtree, node, node->count), item);
+    *split = false;
+    *grown = false;
+    if (node->kind == LEAF) {
+        if (node->count == MAX_ENTRIES) {
+            *split = true;
+            return;
+        }
+        int index = node_rsearch(node, ir->min[0]);
+        memmove(&node->rects[index+1], &node->rects[index], 
+            (node->count-index)*sizeof(struct rect));
+        memmove(&node->items[index+1], &node->items[index], 
+            (node->count-index)*sizeof(struct item));
+        node->rects[index] = *ir;
+        node->items[index] = item;
         node->count++;
+        *grown = !rect_contains(nr, ir);
         return;
     }
-    int dims = rtree->dims;
-    
-    int index = choose_subtree(node->rect, node->count, rect, dims);
-    
-    struct node *child = *node_at(rtree, node, index);
-    double *child_rect = rect_at(rtree, node, index);
-    node_insert(rtree, child, rect, item);
-    rect_expand(child_rect, rect, rtree->dims);
-    if (child->count == rtree->max_items+1) {
-        struct node *right = node_split(rtree, child, child_rect);
-        rect_calc(rtree, child, child_rect);
-        rect_calc(rtree, right, rect_at(rtree, node, node->count));
-        node_copy(rtree, node_at(rtree, node, node->count), &right);
+
+    // Choose a subtree for inserting the rectangle.
+    int index = node_choose_subtree(node, ir);
+    node_insert(tr, &node->rects[index], node->children[index], ir, item, 
+        split, grown);
+    if (*split) {
+        if (node->count == MAX_ENTRIES) {
+            return;
+        }
+        // split the child node
+        struct node *left = node->children[index];
+        struct node *right = node_split(tr, &node->rects[index], left);
+        node->rects[index] = node_rect_calc(left);
+        memmove(&node->rects[index+2], &node->rects[index+1], 
+            (node->count-(index+1))*sizeof(struct rect));
+        memmove(&node->children[index+2], &node->children[index+1], 
+            (node->count-(index+1))*sizeof(struct node*));
+        node->rects[index+1] = node_rect_calc(right);
+        node->children[index+1] = right;
         node->count++;
+        if (node->rects[index].min[0] > node->rects[index+1].min[0]) {
+            node_swap(node, index+1, index);
+        }
+        index++;
+        node_order_to_right(node, index);
+        return node_insert(tr, nr, node, ir, item, split, grown);
+    }
+    if (*grown) {
+        // The child rectangle must expand to accomadate the new item.
+        rect_expand(&node->rects[index], ir);
+        node_order_to_left(node, index);
+        *grown = !rect_contains(nr, ir);
     }
 }
 
-static bool rtree_insert_x(struct rtree *rtree, double *rect, void *item) {
-    if (!fill_pool(rtree)) {
+static struct rtree *_rtree_new_with_allocator(void *(*cust_malloc)(size_t), 
+    void (*cust_free)(void*)
+) {
+    if (!cust_malloc) cust_malloc = malloc;
+    if (!cust_free) cust_free = free;
+    struct rtree *tr = (struct rtree *)cust_malloc(sizeof(struct rtree));
+    if (!tr) {
+        return NULL;
+    }
+    memset(tr, 0, sizeof(struct rtree));
+    tr->malloc = cust_malloc;
+    tr->free = cust_free;
+    return tr;
+}
+
+static struct rtree *_rtree_new() {
+    return rtree_new_with_allocator(NULL, NULL);
+}
+
+static bool _rtree_insert(struct rtree *tr, const NUMTYPE *min, 
+    const NUMTYPE *max, const DATATYPE data) 
+{
+    struct rect rect;
+    memcpy(&rect.min[0], min, sizeof(NUMTYPE)*DIMS);
+    memcpy(&rect.max[0], max?max:min, sizeof(NUMTYPE)*DIMS);
+    struct item item;
+    memcpy(&item.data, &data, sizeof(DATATYPE));
+    if (!fill_pool(tr)) {
         return false;
     }
-    if (!rtree->root) {
-        rtree->root = gimme_leaf(rtree);
-        rtree->root->count = 1;
-        rtree->height = 1;
-        rtree->count = 1;
-        rect_copy(rtree, rect_at(rtree, rtree->root, 0), rect);
-        item_copy(rtree, item_at(rtree, rtree->root, 0), item);
-        rect_copy(rtree, rtree->rect, rect);
+    
+    if (!tr->root) {
+        tr->root = gimme_leaf(tr);
+        tr->rect = rect;
+    }
+    bool split = false;
+    bool grown = false;
+    node_insert(tr, &tr->rect, tr->root, &rect, item, &split, &grown);
+    if (split) {
+        struct node *left = tr->root;
+        struct node *right = node_split(tr, &tr->rect, left);
+        tr->root = gimme_branch(tr);
+        tr->root->rects[0] = node_rect_calc(left);
+        tr->root->rects[1] = node_rect_calc(right);
+        tr->root->children[0] = left;
+        tr->root->children[1] = right;
+        tr->root->count = 2;
+        tr->height++;
+        node_sort(tr->root);
+        return _rtree_insert(tr, min, max, data);
+    }
+    if (grown) {
+        rect_expand(&tr->rect, &rect);
+        node_sort(tr->root);
+    }
+    tr->count++;
+    return true;
+}
+
+static void _rtree_free(struct rtree *tr) {
+    if (tr->root) {
+        node_free(tr, tr->root);
+    }
+    release_pool(tr);
+    tr->free(tr);
+}
+
+static bool node_search(struct node *node, struct rect *rect,
+    bool (*iter)(const NUMTYPE *min, const NUMTYPE *max, const DATATYPE data, void *udata), 
+    void *udata) 
+{
+    if (node->kind == LEAF) {
+        for (int i = 0; i < node->count; i++) {
+            if (rect_intersects(&node->rects[i], rect)) {
+                if (!iter(node->rects[i].min, node->rects[i].max, node->items[i].data, udata)) {
+                    return false;
+                }
+            }
+        }
         return true;
     }
-    node_insert(rtree, rtree->root, rect, item);
-    rect_expand(rtree->rect, rect, rtree->dims);
-    if (rtree->root->count == rtree->max_items+1) {
-        // overflow. split root into two and calculate their rects
-        double right_rect[8*rtree->dims*2]; // VLA
-        struct node *right = node_split(rtree, rtree->root, rtree->rect);
-        rect_calc(rtree, rtree->root, rtree->rect);
-        rect_calc(rtree, right, right_rect);
-
-        // create a new root and place the old root and new node into new root
-        // at positions 0 and 1.
-        struct node *new_root = gimme_branch(rtree);
-        rect_copy(rtree, rect_at(rtree, new_root, 0), rtree->rect);
-        node_copy(rtree, node_at(rtree, new_root, 0), &rtree->root);
-        rect_copy(rtree, rect_at(rtree, new_root, 1), right_rect);
-        node_copy(rtree, node_at(rtree, new_root, 1), &right);
-
-        // assign the new root
-        rtree->root = new_root;
-        rtree->root->count = 2;
-        
-        // finally, recalculate the root
-        rect_calc(rtree, rtree->root, rtree->rect);
-        rtree->height++;
+    for (int i = 0; i < node->count; i++) {
+        if (rect_intersects(&node->rects[i], rect)) {
+            if (!node_search(node->children[i], rect, iter, udata)) {
+                return false;
+            }
+        }
     }
-    rtree->count++;
     return true;
 }
 
-// attempt_reinsert tries to reinsert all items in the reinsert list. Because
-// an insert can fail due to the system being out of memory, this operation is
-// only an attempt. It's ok if we fail here. We'll automatically try again 
-// later.
-static void attempt_reinsert(struct rtree *rtree) {
-    // resinsert items from leaf nodes
-    while (rtree->reinsert) {
-        struct node *node = rtree->reinsert;
-        while (node->count > 0) {
-            void *item = item_at(rtree, node, node->count-1);
-            double *rect = rect_at(rtree, node, node->count-1);
-            if (!rtree_insert_x(rtree, rect, item)) {
-                return; // out of memory, that's ok
+static void _rtree_search(struct rtree *tr, const NUMTYPE *min, const NUMTYPE *max,
+    bool (*iter)(const NUMTYPE *min, const NUMTYPE *max, const DATATYPE data, void *udata), 
+    void *udata)
+{
+    struct rect rect;
+    memcpy(&rect.min[0], min, sizeof(NUMTYPE)*DIMS);
+    memcpy(&rect.max[0], max?max:min, sizeof(NUMTYPE)*DIMS);
+    if (tr->root && rect_intersects(&tr->rect, &rect)) {
+        node_search(tr->root, &rect, iter, udata);
+    }
+}
+
+static size_t _rtree_count(struct rtree *tr) {
+    return tr->count;
+}
+
+static void node_delete(struct rtree *tr, struct rect *nr, struct node *node, 
+    struct rect *ir, struct item item, bool *removed, bool *shrunk)
+{
+    *removed = false;
+    *shrunk = false;
+    if (node->kind == LEAF) {
+        for (int i = 0; i < node->count; i++) {
+            if (!rect_contains(ir, &node->rects[i]) || 
+                node->items[i].data != item.data) 
+            {
+                continue;
             }
-            rtree->reinsert_count--;
+
+            // Found the target item to delete.
+            memmove(&node->rects[i], &node->rects[i+1], 
+                (node->count-(i+1))*sizeof(struct rect));
+            memmove(&node->items[i], &node->items[i+1], 
+                (node->count-(i+1))*sizeof(struct item));
             node->count--;
+            if (rect_onedge(ir, nr)) {
+                // The item rect was on the edge of the node rect.
+                // We need to recalculate the node rect.
+                *nr = node_rect_calc(node);
+                // Notify the caller that we shrunk the rect.
+                *shrunk = true; 
+            }
+            *removed = true;
+            return;
         }
-        rtree->reinsert = node->next;
-        takeaway(rtree, node);
-    }
-}
-
-// rtree_insert inserts an item into the rtree. This operation performs a copy
-// of the data that is pointed to in the second and third arguments. The R-tree
-// expects a rectangle, which is an array of doubles, that has the first N
-// values as the minimum corner of the rect, and the next N values as the
-// maximum corner of the rect, where N is the number of dimensions provided
-// to rtree_new().
-// Returns false if the system is out of memory.
-bool rtree_insert(struct rtree *rtree, double *rect, void *item) {
-    if (rtree->reinsert) {
-        attempt_reinsert(rtree);
-    }
-    return rtree_insert_x(rtree, rect, item);
-}
-
-static void node_free(struct rtree *rtree, struct node *node) {
-    if (!node->leaf) {
-        for (int i=0;i<node->count;i++) {
-            node_free(rtree, *node_at(rtree, node, i));
-        }
-    }
-    rtfree(node);
-}
-
-static void release_pool(struct rtree *rtree) {
-    for (int i = 0; i < rtree->pool.leaves.len; i++) {
-        rtfree(rtree->pool.leaves.nodes[i]);
-    }
-    rtfree(rtree->pool.leaves.nodes);
-    for (int i = 0; i < rtree->pool.branches.len; i++) {
-        rtfree(rtree->pool.branches.nodes[i]);
-    }
-    rtfree(rtree->pool.branches.nodes);
-    memset(&rtree->pool, 0, sizeof(struct pool));
-}
-
-// rtree_free frees the rtree.
-void rtree_free(struct rtree *rtree) {
-    if (!rtree) {
         return;
     }
-    if (rtree->root) {
-        node_free(rtree, rtree->root);
-    }
-    release_pool(rtree);
-    while (rtree->reinsert) {
-        rtfree(rtree->reinsert);
-        rtree->reinsert = rtree->reinsert->next;
-    }
-    rtfree(rtree->rect);
-    rtfree(rtree);
-}
-
-// rtree_count returns the number of items in the rtree.
-size_t rtree_count(struct rtree *rtree) {
-    return rtree->count + rtree->reinsert_count;
-}
-
-static bool rect_intersects(double *rect, double *other, int dims) {
-    for (int i = 0; i < dims; i++) {
-        if (rect[dims+i] < other[i] || rect[i] > other[dims+i]) {
-            return false;
+    for (int i = 0; i < node->count; i++) {
+        if (!rect_contains(&node->rects[i], ir)) {
+            continue;
         }
-    }
-    return true;
-}
-
-static bool fn_search(struct rtree *rtree, struct node *node, double *rect,
-       bool (*iter)(const double *rect, const void *item, void *udata),
-       void *udata)
-{
-    int dims = rtree->dims;
-    double *crect = node->rect;
-    if (node->leaf) {
-        for (int i = 0; i < node->count; i++) {
-            if (rect_intersects(rect, crect, dims)) {
-                void *citem = item_at(rtree, node, i);
-                if (!iter(crect, citem, udata)) {
-                    return false;
-                }
+        struct rect crect = node->rects[i];
+        node_delete(tr, &node->rects[i], node->children[i], ir, item, removed,
+            shrunk);
+        if (!*removed) {
+            continue;
+        }
+        if (node->children[i]->count == 0) {
+            // underflow. remove node
+            node_free(tr, node->children[i]);
+            memmove(&node->rects[i], &node->rects[i+1], 
+                (node->count-(i+1))*sizeof(struct rect));
+            memmove(&node->children[i], &node->children[i+1], 
+                (node->count-(i+1))*sizeof(struct node *));
+            node->count--;
+            *nr = node_rect_calc(node);
+            *shrunk = true;
+            return;
+        }
+        if (*shrunk) {
+            *shrunk = !rect_equals(&node->rects[i], &crect);
+            if (*shrunk) {
+                *nr = node_rect_calc(node);
             }
-            crect += dims*2;
+            node_order_to_right(node, i);
         }
+        return;
+    }
+    return;
+}
+
+static void _rtree_delete(struct rtree *tr, const NUMTYPE *min, const NUMTYPE *max, const DATATYPE data) {
+    struct rect rect;
+    memcpy(&rect.min[0], min, sizeof(NUMTYPE)*DIMS);
+    memcpy(&rect.max[0], max?max:min, sizeof(NUMTYPE)*DIMS);
+    struct item item;
+    memcpy(&item.data, &data, sizeof(DATATYPE));
+    if (!tr->root || !rect_contains(&tr->rect, &rect)) {
+        return;
+    }
+    bool removed = false;
+    bool shrunk = false;
+    node_delete(tr, &tr->rect, tr->root, &rect, item, &removed, &shrunk);
+    if (!removed) {
+        return;
+    }
+    tr->count--;
+    if (tr->count == 0) {
+        node_free(tr, tr->root);
+        tr->root = NULL;
+        memset(&tr->rect, 0, sizeof(struct rect));
     } else {
+        while (tr->root->kind == BRANCH && tr->root->count == 1) {
+            struct node *prev = tr->root;
+            tr->root = tr->root->children[0];
+            prev->count = 0;
+            node_free(tr, prev);
+        }
+        if (shrunk) {
+            tr->rect = node_rect_calc(tr->root);
+        }
+    }
+}
+
+//////////////////
+// checker
+//////////////////
+
+static void node_check_order(struct node *node) {
+    for (int i = 1; i < node->count; i++) {
+        if (node->rects[i].min[0] < node->rects[i-1].min[0]) {
+            panic("out of order")
+        }
+        if (node->kind == BRANCH) {
+            node_check_order(node->children[i]);
+        }
+    }
+}
+
+static void rtree_check_order(struct rtree *tr) {
+    if (tr->root) {
+        node_check_order(tr->root);
+    }
+}
+
+static void node_check_rect(struct rect *rect, struct node *node) {
+    struct rect rect2 = node_rect_calc(node);
+    if (!rect_equals(rect, &rect2)){
+        panic("invalid rect")
+    }
+    if (node->kind == BRANCH) {
         for (int i = 0; i < node->count; i++) {
-            if (rect_intersects(rect, crect, dims)) {
-                struct node *cnode = *node_at(rtree, node, i);
-                if (!fn_search(rtree, cnode, rect, iter, udata)) {
-                    return false;
-                }
-            }
-            crect += dims*2;
+            node_check_rect(&node->rects[i], node->children[i]);
         }
-    }
-    return true;
-}
-
-// search_reinsert searches the reinsert list.
-static bool search_reinsert(struct rtree *rtree, double *rect, 
-                            bool (*iter)(const double *rect, const void *item, 
-                                         void *udata), 
-                            void *udata)
-{
-    struct node *node = rtree->reinsert;
-    while (node) {
-        for (int i = 0; i < node->count; i++) {
-            double *crect = rect_at(rtree, node, i);
-            if (rect_intersects(rect, crect, rtree->dims)) {
-                void *citem = item_at(rtree, node, i);
-                if (!iter(crect, citem, udata)) {
-                    return false;
-                }
-            }
-        }
-        node = node->next;
-    }
-    return true;
-}
-
-// push_reinsert add the leaves belonging to node to the rtree reinsert list
-static void push_reinsert(struct rtree *rtree, struct node *node) {
-    if (node->leaf) {
-        node->next = rtree->reinsert;
-        rtree->reinsert = node;
-        rtree->reinsert_count += node->count;
-        rtree->count -= node->count;
-    } else {
-        for (int i = 0; i < node->count; i++) {
-             push_reinsert(rtree, *node_at(rtree, node, i));
-        }
-        takeaway(rtree, node);
     }
 }
 
-bool rtree_search(struct rtree *rtree, double *rect, 
-                  bool (*iter)(const double *rect, const void *item, 
-                               void *udata), 
-                  void *udata)
-{
-    if (rtree->reinsert) {
-        if (!search_reinsert(rtree, rect, iter, udata)) {
-            return false;
-        }
+static void rtree_check_rects(struct rtree *tr) {
+    if (tr->root) {
+        node_check_rect(&tr->rect, tr->root);
     }
-    if (rtree->root) {
-        return fn_search(rtree, rtree->root, rect, iter, udata);
-    }
-    return true;
 }
 
-static bool node_delete(struct rtree *rtree, struct node *node, double *rect,
-                        void *item)
-{
-    int dims = rtree->dims;
-    double *crect = node->rect;
-    if (node->leaf) {
-        for (int i = 0; i < node->count; i++) {
-            if (rect_intersects(rect, crect, dims)) {
-                void *citem = item_at(rtree, node, i);
-                if (memcmp(citem, item, rtree->elsize) == 0) {
-                    /* found the target item, delete it now */ 
-                    rect_copy(rtree, crect, 
-                            rect_at(rtree, node, node->count-1));
-                    item_copy(rtree, citem, 
-                            item_at(rtree, node, node->count-1));
-                    node->count--;
-                    return true;
-                }
-            }
-            crect += dims*2;
-        }
-    } else {
-        for (int i = 0; i < node->count; i++) {
-            if (rect_intersects(rect, crect, dims)) {
-                struct node *cnode = *node_at(rtree, node, i);
-                if (node_delete(rtree, cnode, rect, item)) {
-                    if (cnode->count < rtree->min_items) {
-                        /* underflow */
-                        push_reinsert(rtree, cnode);
-                        node_rect_data_copy(rtree, node, i, node, 
-                                            node->count-1);
-                        node->count--;
-                    } else {
-                        rect_calc(rtree, cnode, crect);
-                    }
-                    return true;
-                }
-            }
-            crect += dims*2;
-        }
-    }
-    return false;
+static void _rtree_check(struct rtree *tr) {
+    rtree_check_order(tr);
+    rtree_check_rects(tr);
 }
 
-// delete_from_reinsert searches the reinsert list for the target item.
-// Returns true if the item was found and deleted.
-static bool delete_from_reinsert(struct rtree *rtree, double *rect, 
-                                 void *item) 
-{
-    struct node *node = rtree->reinsert;
-    while (node) {
-        for (int i = 0; i < node->count; i++) {
-            double *crect = rect_at(rtree, node, i);
-            if (rect_intersects(rect, crect, rtree->dims)) { 
-                void *citem = item_at(rtree, node, i);
-                if (memcmp(item, citem, rtree->elsize) == 0) {
-                    node_rect_data_copy(rtree, node, i, node, node->count-1);
-                    rtree->reinsert_count--;
-                    node->count--;
-                    return true;
-                }
-            }
-        }
-        node = node->next;    
-    }
-    return false;
-}
 
-// rtree_delete deletes an item from the rtree. 
-// Returns true if the item was deleted or false if the item was not found.
-bool rtree_delete(struct rtree *rtree, double *rect, void *item) {
-    // search the reinsert list
-    if (rtree->reinsert) {
-        bool deleted = delete_from_reinsert(rtree, rect, item);
-        attempt_reinsert(rtree);
-        if (deleted) {
-            return true;
-        }
-    }
-    // search the tree
-    if (!rtree->root) {
-        return false;
-    }
-    bool deleted = node_delete(rtree, rtree->root, rect, item);
-    if (!deleted) {
-        return false;
-    }
-    rtree->count--;
-    if (rtree->count == 0) {
-        // tree is empty, remove the root
-        takeaway(rtree, rtree->root);
-        rtree->root = NULL;
-        rtree->height = 0;
-    } else {
-        if (!rtree->root->leaf && rtree->root->count == 1) {
-            // drop the height
-            struct node *new_root = *node_at(rtree, rtree->root, 0);
-            takeaway(rtree, rtree->root);
-            rtree->root = new_root;
-            rtree->height--;
-        }
-        rect_calc(rtree, rtree->root, rtree->rect);
-    }
-    // attempt to reinsert items from deleted leaves. 
-    if (rtree->reinsert) {
-        attempt_reinsert(rtree);
-    }
-    return true;
-}
 
-//==============================================================================
-// TESTS AND BENCHMARKS
-// $ cc -DRTREE_TEST rtree.c && ./a.out              # run tests
-// $ cc -DRTREE_TEST -O3 rtree.c && BENCH=1 ./a.out  # run benchmarks
-//==============================================================================
-#ifdef RTREE_TEST
-
-#pragma GCC diagnostic ignored "-Wpragmas"
-#pragma GCC diagnostic ignored "-Wextra"
-#pragma GCC diagnostic ignored "-Wcompound-token-split-by-macro"
-
-#ifdef CITIES
-#include "cities.xh"
-#endif
-#include <assert.h>
-#include <time.h>
 
 static const double svg_scale = 20.0;
 static const char *strokes[] = { "black", "red", "green", "purple" };
 static const int nstrokes = 4;
 
-static void node_write_svg(struct rtree *rtree, struct node *node, double *rect,
-                           FILE *f, int height, int depth) 
-{
-    double *min = rect;
-    double *max = &rect[rtree->dims];
-    bool point = min[0] == max[0] && min[1] == max[1];
+static void node_write_svg(struct node *node, struct rect *rect, FILE *f, int depth) {
+    bool point = rect->min[0] == rect->max[0] && rect->min[1] == rect->max[1];
     if (node) {
-        if (!node->leaf) {
+        if (node->kind == BRANCH) {
             for (int i = 0; i < node->count; i++) {
-                node_write_svg(rtree, *node_at(rtree, node, i), 
-                               rect_at(rtree, node, i), f, height-1, depth+1);
+                node_write_svg(node->children[i], &node->rects[i], f, depth+1);
             }
         } else {
             for (int i = 0; i < node->count; i++) {
-                node_write_svg(rtree, NULL, 
-                            rect_at(rtree, node, i), f, height-1, depth+1);
+                node_write_svg(NULL, &node->rects[i], f, depth+1);
             }
         }
     }
     if (point) {
-        double w = (max[0]-min[0]+1/svg_scale)*svg_scale*10;
+        double w = (rect->max[0]-rect->min[0]+1/svg_scale)*svg_scale*10;
         fprintf(f, 
             "<rect x=\"%f\" y=\"%f\" width=\"%f\" height=\"%f\" "
                 "fill=\"%s\" fill-opacity=\"1\" "
                 "rx=\"3\" ry=\"3\"/>\n",
-            (min[0])*svg_scale-w/2, 
-            (min[1])*svg_scale-w/2,
+            (rect->min[0])*svg_scale-w/2, 
+            (rect->min[1])*svg_scale-w/2,
             w, w, 
             strokes[depth%nstrokes]);
     } else {
@@ -766,19 +783,19 @@ static void node_write_svg(struct rtree *rtree, struct node *node, double *rect,
                 "stroke=\"%s\" fill=\"%s\" "
                 "stroke-width=\"%d\" "
                 "fill-opacity=\"0\" stroke-opacity=\"1\"/>\n",
-            (min[0])*svg_scale,
-            (min[1])*svg_scale,
-            (max[0]-min[0]+1/svg_scale)*svg_scale,
-            (max[1]-min[1]+1/svg_scale)*svg_scale,
+            (rect->min[0])*svg_scale,
+            (rect->min[1])*svg_scale,
+            (rect->max[0]-rect->min[0]+1/svg_scale)*svg_scale,
+            (rect->max[1]-rect->min[1]+1/svg_scale)*svg_scale,
             strokes[depth%nstrokes],
             strokes[depth%nstrokes],
-            height+1);
+            1);
     }
 }
 
-// rtree_write_svg draws the R-tree to an SVG file. This is only useful on
-// small geospatial dataset.
-void rtree_write_svg(struct rtree *rtree, const char *path) {
+// rtree_write_svg draws the R-tree to an SVG file. This is only useful with
+// small geospatial 2D dataset. 
+static void _rtree_write_svg(struct rtree *tr, const char *path) {
     FILE *f = fopen(path, "wb+");
     fprintf(f, "<svg viewBox=\"%.0f %.0f %.0f %.0f\" " 
         "xmlns =\"http://www.w3.org/2000/svg\">\n",
@@ -786,397 +803,67 @@ void rtree_write_svg(struct rtree *rtree, const char *path) {
         380.0*svg_scale, 190.0*svg_scale);
     fprintf(f, "<g transform=\"scale(1,-1)\">\n");
 
-    if (rtree->root && rtree->dims > 1) {
-        node_write_svg(rtree, rtree->root, rtree->rect, f, rtree->height, 0);
+    if (tr->root) {
+        node_write_svg(tr->root, &tr->rect, f, 0);
     }
     fprintf(f, "</g>\n");
     fprintf(f, "</svg>\n");
     fclose(f);
 }
 
+// EXTERNS
 
-static void node_deep_check(struct rtree *rtree, struct node *node, 
-                            double *rect, int height, int depth)
+struct rtree *rtree_new_with_allocator(void *(*malloc)(size_t), 
+    void (*free)(void*))
 {
-    assert(node->count);
-    assert(height);
-    double rect2[8*rtree->dims*2]; // VLA
-    for (int i = 0; i < node->count; i++) {
-        double *child_rect = rect_at(rtree, node, i);
-        assert((node->leaf && height == 1) || (!node->leaf && height > 1));
-        // for (int j = 0; j < depth; j++) { printf("  "); }
-        // printf("%d: ", i); print_rect(rtree, child_rect); printf("\n");
-        if (!node->leaf) {
-            struct node *child = *node_at(rtree, node, i);
-            node_deep_check(rtree, child, child_rect, height-1, depth + 1);
-        }
-        if (i == 0) {
-            rect_copy(rtree, rect2, child_rect);
-        } else {
-            rect_expand(rect2, child_rect, rtree->dims);
-        }
-    }
-    assert(memcmp(rect, rect2, 8*rtree->dims*2) == 0);
+    return _rtree_new_with_allocator(malloc, free);
+}
+struct rtree *rtree_new() {
+    return _rtree_new();
 }
 
-static void rtree_deep_check(struct rtree *rtree) {
-    // printf(">>>> DEEP CHECK <<<<\n");
-    if (rtree->root) {
-        // print_rect(rtree, rtree->rect); printf(" ((root)) \n");
-        node_deep_check(rtree, rtree->root, rtree->rect, rtree->height, 0);
-    } else {
-        assert(rtree->height == 0);
-        assert(rtree->count == 0);
-    }
+// rtree_insert inserts an item into the rtree. 
+// This operation performs a copy of the data that is pointed to in the second
+// and third arguments. The R-tree expects a rectangle, which is two arrays of
+// doubles. The first N values as the minimum corner of the rect, and the next
+// N values as the maximum corner of the rect, where N is the number of
+// dimensions.
+// When inserting points, the max coordinates is optional (set to NULL).
+// Returns false if the system is out of memory.
+bool rtree_insert(struct rtree *tr, const NUMTYPE *min, const NUMTYPE *max, 
+    const DATATYPE data) 
+{
+    return _rtree_insert(tr, min, max, data);
 }
 
-
-void print_rect(struct rtree *rtree, double *rect) {
-    printf("[[");
-    for (int i = 0; i < rtree->dims; i++) {
-        if (i > 0) {
-            printf(",");
-        }
-        printf("%f",rect[i]);
-    }
-    printf("],[");
-    for (int i = 0; i < rtree->dims; i++) {
-        if (i > 0) {
-            printf(",");
-        }
-        printf("%f",rect[rtree->dims+i]);
-    }
-    printf("]]");
+void rtree_free(struct rtree *tr) {
+    return _rtree_free(tr);
 }
 
-static bool rand_alloc_fail = false;
-static int rand_alloc_fail_odds = 3; // 1 in 3 chance malloc will fail.
-static uintptr_t total_allocs = 0;
-static uintptr_t total_mem = 0;
-
-static void *xmalloc(size_t size) {
-    if (rand_alloc_fail && rand()%rand_alloc_fail_odds == 0) {
-        return NULL;
-    }
-    void *mem = malloc(sizeof(uintptr_t)+size);
-    assert(mem);
-    *(uintptr_t*)mem = size;
-    total_allocs++;
-    total_mem += size;
-    return (char*)mem+sizeof(uintptr_t);
+void rtree_search(struct rtree *tr, const NUMTYPE *min, const NUMTYPE *max,
+    bool (*iter)(const NUMTYPE *min, const NUMTYPE *max, const DATATYPE data, 
+        void *udata), 
+    void *udata)
+{
+    return _rtree_search(tr, min, max, iter, udata);
 }
 
-static void xfree(void *ptr) {
-    if (ptr) {
-        total_mem -= *(uintptr_t*)((char*)ptr-sizeof(uintptr_t));
-        free((char*)ptr-sizeof(uintptr_t));
-        total_allocs--;
-    }
+// rtree_count returns the number of items in the rtree.
+size_t rtree_count(struct rtree *tr) {
+    return _rtree_count(tr);
 }
 
-static void shuffle(void *array, int numels, int elsize) {
-    char tmp[elsize];
-    char *arr = array;
-    for (int i = 0; i < numels - 1; i++) {
-        int j = i + rand() / (RAND_MAX / (numels - i) + 1);
-        memcpy(tmp, arr + j * elsize, elsize);
-        memcpy(arr + j * elsize, arr + i * elsize, elsize);
-        memcpy(arr + i * elsize, tmp, elsize);
-    }
+// rtree_delete deletes an item from the rtree. 
+void rtree_delete(struct rtree *tr, const NUMTYPE *min, const NUMTYPE *max, 
+    const DATATYPE data)
+{
+    return _rtree_delete(tr, min, max, data);
 }
 
-static void copy_rand_point(int dims, double *point) {
-    for (int i = 0; i < dims; i++) {
-        if (i == 0) {
-            point[i] = ((double)rand()/(double)RAND_MAX) * 360.0 - 180.0;
-        } else if (i == 1) {
-            point[i] = ((double)rand()/(double)RAND_MAX) * 180.0 - 90.0;
-        } else {
-            point[i] = ((double)rand()/(double)RAND_MAX) * 100;
-        }
-        point[dims+i] = point[i];
-    }
+void rtree_write_svg(struct rtree *tr, const char *path) {
+    return _rtree_write_svg(tr, path);
 }
 
-static bool search_iter(const double *rect, const void *item, void *udata) {
-    (*(int*)udata)++;
-    return true;
+void rtree_check(struct rtree *tr) {
+    return _rtree_check(tr);
 }
-
-struct single_ctx {
-    int dims;
-    double *rect;
-    int index;
-    bool found;
-    struct rtree *rtree;
-};
-
-static bool single_iter(const double *rect, const void *item, void *udata) {
-    struct single_ctx *ctx = udata;
-    if (memcmp(rect, ctx->rect, 8*ctx->dims*2) == 0 && 
-        *(int*)item == ctx->index) 
-    {
-        ctx->found = true;
-    }
-    return true;
-}
-
-
-static bool tsearch(struct rtree *rtree, int dims, double *rect, int index) {
-    struct single_ctx ctx = {
-        .dims = dims,
-        .rect = rect,
-        .index = index,
-        .rtree = rtree,
-    };
-    rtree_search(rtree, rect, single_iter, &ctx);
-    return ctx.found;
-}
-
-static void test(int N, int dims) {
-    double *rects;
-    bool use_cities = false;
-#ifdef CITIES
-    if (N ==0 && dims == 0) {
-        use_cities = true;
-        N = sizeof(cities)/(sizeof(int)*2);
-        dims = 2;
-        while(!(rects = xmalloc(8*dims*2*N))){}
-        assert(rects);
-        for (int i = 0; i < N; i++) {
-            double *point = &rects[dims*2*i];
-            point[0] = (double)cities[i*2+0] / 1000.0 - 180.0;
-            point[1] = (double)cities[i*2+1] / 1000.0 - 90.0;
-            point[2] = (double)cities[i*2+0] / 1000.0 - 180.0;
-            point[3] = (double)cities[i*2+1] / 1000.0 - 90.0;
-        }
-    }
-#endif
-    if (!use_cities) {
-        while(!(rects = xmalloc(8*dims*2*N))){}
-        assert(rects);
-        for (int i = 0; i < N; i++) {
-            double *rect = &rects[dims*2*i];
-            for (int j = 0; j < dims; j++) {
-                rect[j] = (double)rand()/RAND_MAX * 100;
-                rect[dims+j] = rect[j] + (double)rand()/RAND_MAX;
-            }
-        }
-    }
-    int *vals;
-    while(!(vals = xmalloc(sizeof(int)*N))){}
-    for (int i = 0; i < N; i++) {
-        vals[i] = i;
-    }  
-
-    struct rtree *rtree;
-    while(!(rtree = rtree_new(sizeof(int), dims))){}
-    rtree_deep_check(rtree);
-
-    shuffle(vals, N, sizeof(int));
-    for (int i = 0; i < N; i++) {
-        int index = vals[i];
-        double *rect = &rects[dims*2*index];
-        assert(!rtree_delete(rtree, rect, &index));
-        assert(!tsearch(rtree, dims, rect, index));
-        while (!rtree_insert(rtree, rect, &index)){}
-        assert(rtree_count(rtree) == i+1);
-        assert(tsearch(rtree, dims, rect, index));
-        assert(rtree_delete(rtree, rect, &index));
-        assert(rtree_count(rtree) == i);
-        assert(!tsearch(rtree, dims, rect, index));
-        assert(!rtree_delete(rtree, rect, &index));
-        while(!rtree_insert(rtree, rect, &index)){}
-        assert(rtree_count(rtree) == i+1);
-        assert(tsearch(rtree, dims, rect, index));
-        rtree_deep_check(rtree);
-    }
-    rtree_deep_check(rtree);
-    
-    if (use_cities) {
-        rtree_write_svg(rtree, "cities.svg");
-    } else if (dims == 2) {
-        rtree_write_svg(rtree, "dim2.svg");
-    }
-
-
-    shuffle(vals, N, sizeof(int));
-    double del = 0.50;
-    for (int i = 0; i < N*del; i++) {
-        int index = vals[i];
-        double *rect = &rects[dims*2*index];
-        assert(rtree_delete(rtree, rect, &index));
-    }
-    if (use_cities) {
-        rtree_write_svg(rtree, "cities-2.svg");
-    } else if (dims == 2) {
-        rtree_write_svg(rtree, "dim2-2.svg");
-    }
-
-    for (int i = 0; i < N*del; i++) {
-        int index = vals[i];
-        double *rect = &rects[dims*2*index];
-        while (!rtree_insert(rtree, rect, &index)){}
-    }
-
-    if (use_cities) {
-        rtree_write_svg(rtree, "cities-3.svg");
-    } else if (dims == 2) {
-        rtree_write_svg(rtree, "dim2-3.svg");
-    }
-
-    shuffle(vals, N, sizeof(int));
-    for (int i = 0; i < N; i++) {
-        int index = vals[i];
-        double *rect = &rects[dims*2*index];
-        assert(tsearch(rtree, dims, rect, index));
-    }
-
-
-    shuffle(vals, N, sizeof(int));
-    for (int i = 0; i < N; i++) {
-        int index = vals[i];
-        double *rect = &rects[dims*2*index];
-        assert(tsearch(rtree, dims, rect, index));
-        assert(rtree_count(rtree) == N-i);
-        rtree_delete(rtree, rect, &index);
-        assert(!tsearch(rtree, dims, rect, index));
-        assert(rtree_count(rtree) == N-i-1);
-        rtree_deep_check(rtree);
-    }
-    rtree_deep_check(rtree);
-
-
-
-
-    rtree_free(rtree);
-    xfree(vals);
-    xfree(rects);
-    if (total_allocs != 0) {
-        fprintf(stderr, "total_allocs: expected 0, got %lu\n", total_allocs);
-        exit(1);
-    }
-}
-
-static void all() {
-    int seed = getenv("SEED")?atoi(getenv("SEED")):time(NULL);
-    srand(seed);
-    printf("seed=%d\n", seed);
-
-    int counts[] = { 0, 1, 2, 3, 4, 5, 8, 16, 32, 64, 128, 256, 512, 1024 };
-
-    rand_alloc_fail = true;
-
-    for (int dims = 1; dims <= 8; dims++) {
-        printf("(%d) => ", dims);
-        for (int i = 0; i < sizeof(counts)/sizeof(int); i++) {
-            printf("%d ", counts[i]);
-            fflush(stdout);
-            test(counts[i], dims);
-        }
-        printf("\n");
-    }
-#ifdef CITIES
-    printf("testings cities...\n");
-    test(0, 0);
-#endif
-    rand_alloc_fail = false;
-}
-
-#define bench(name, N, code) {{ \
-    if (strlen(name) > 0) { \
-        printf("%-14s ", name); \
-    } \
-    size_t tmem = total_mem; \
-    size_t tallocs = total_allocs; \
-    uint64_t bytes = 0; \
-    clock_t begin = clock(); \
-    for (int i = 0; i < N; i++) { \
-        (code); \
-    } \
-    clock_t end = clock(); \
-    double elapsed_secs = (double)(end - begin) / CLOCKS_PER_SEC; \
-    double bytes_sec = (double)bytes/elapsed_secs; \
-    printf("%d ops in %.3f secs, %.0f ns/op, %.0f op/sec", \
-        N, elapsed_secs, \
-        elapsed_secs/(double)N*1e9, \
-        (double)N/elapsed_secs \
-    ); \
-    if (bytes > 0) { \
-        printf(", %.1f GB/sec", bytes_sec/1024/1024/1024); \
-    } \
-    if (total_mem > tmem) { \
-        size_t used_mem = total_mem-tmem; \
-        printf(", %.2f bytes/op", (double)used_mem/N); \
-    } \
-    if (total_allocs > tallocs) { \
-        size_t used_allocs = total_allocs-tallocs; \
-        printf(", %.2f allocs/op", (double)used_allocs/N); \
-    } \
-    printf("\n"); \
-}}
-
-
-static void benchmarks() {
-    int seed = getenv("SEED")?atoi(getenv("SEED")):time(NULL);
-    int N = getenv("N")?atoi(getenv("N")):1000000;
-    int dims = 2;
-    printf("seed=%d count=%d\n", seed, N);
-    srand(seed);
-
-    double *coords = xmalloc(8*dims*2*N);
-    for (int i = 0; i < N; i++) {
-        double *point = &coords[dims*2*i];
-        copy_rand_point(dims, point);
-    }
-
-    struct rtree *rtree = rtree_new(sizeof(int), dims);
-
-    bench("insert", N, {
-        double *point = &coords[dims*2*i];
-        rtree_insert(rtree, point, &(int){i});
-    });
-
-    rtree_write_svg(rtree, "out.svg");
-
-    bench("search", N, {
-        double *point = &coords[dims*2*i];
-        int res = 0;
-        rtree_search(rtree, point, search_iter, &res);
-        assert(res == 1);
-    });
-
-    bench("replace", N, {
-        double *point = &coords[dims*2*i];
-        rtree_delete(rtree, point, &(int){i});
-        rtree_insert(rtree, point, &(int){i});
-    });
-
-
-    bench("delete", N, {
-        double *point = &coords[dims*2*i];
-        rtree_delete(rtree, point, &(int){i});
-    });
-
-    rtree_free(rtree);
-
-    xfree(coords);
-    if (total_allocs != 0) {
-        fprintf(stderr, "total_allocs: expected 0, got %lu\n", total_allocs);
-        exit(1);
-    }
-
-}
-
-int main() {
-    rtree_set_allocator(xmalloc, xfree);
-    if (getenv("BENCH")) {
-        printf("Running rtree.c benchmarks...\n");
-        benchmarks();
-    } else {
-        printf("Running rtree.c tests...\n");
-        all();
-        printf("PASSED\n");
-    }
-}
-#endif

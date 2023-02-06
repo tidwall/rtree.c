@@ -6,11 +6,8 @@ An [R-tree](https://en.wikipedia.org/wiki/R-tree) implementation in C.
 
 ## Features
 
-- Supports any number of dimensions
-- Generic interface with support for variable sized items
-- ANSI C (C99)
+- Generic interface for multiple dimensions and data types
 - Supports custom allocators
-- Robust, self-contained tests
 - Pretty darn good performance 🚀
 
 ## Example
@@ -29,65 +26,63 @@ struct city {
 
 struct city phx = { .name = "Phoenix", .lat = 33.448, .lon = -112.073 };
 struct city enn = { .name = "Ennis", .lat = 52.843, .lon = -8.986 };
-struct city pra = { .name = "Prague", .lat = 50.088, .lon = -14.420 };
+struct city pra = { .name = "Prague", .lat = 50.088, .lon = 14.420 };
 struct city tai = { .name = "Taipei", .lat = 25.033, .lon = 121.565 };
 struct city her = { .name = "Hermosillo", .lat = 29.102, .lon = -110.977 };
 struct city him = { .name = "Himeji", .lat = 34.816, .lon = 134.700 };
 
-bool city_iter(const double *rect, const void *item, void *udata) {
+bool city_iter(const double *min, const double *max, const void *item, void *udata) {
     const struct city *city = item;
     printf("%s\n", city->name);
     return true;
 }
 
 int main() {
-    // create a new rtree where each item is a `struct city*`. 
-    struct rtree *tr = rtree_new(sizeof(struct city*), 2);
+    // Create a new rtree where each item is a `struct city*`. 
+    struct rtree *tr = rtree_new();
 
-    // load some cities into the rtree. Each set operation performs a copy of 
-    // the data that is pointed to in the second and third arguments. 
-    // The R-tree expects a rectangle, which is an array of doubles, that
-    // has the first N values as the minimum corner of the rect, and the next
+    // Load some cities into the rtree. Each insert operation performs a copy
+    // of the data that is pointed to in the second and third arguments. 
+    // The R-tree expects a rectangle, which is two arrays of doubles. 
+    // The first N values as the minimum corner of the rect, and the next
     // N values as the maximum corner of the rect, where N is the number of
-    // dimensions provided to rtree_new(). For points the the min and max
-    // values should match.
-    rtree_insert(tr, (double[]){ phx.lon, phx.lat, phx.lon, phx.lat }, &phx);
-    rtree_insert(tr, (double[]){ enn.lon, enn.lat, enn.lon, enn.lat }, &enn);
-    rtree_insert(tr, (double[]){ pra.lon, pra.lat, pra.lon, pra.lat }, &pra);
-    rtree_insert(tr, (double[]){ tai.lon, tai.lat, tai.lon, tai.lat }, &tai);
-    rtree_insert(tr, (double[]){ her.lon, her.lat, her.lon, her.lat }, &her);
-    rtree_insert(tr, (double[]){ him.lon, him.lat, him.lon, him.lat }, &him);
+    // dimensions. The default R-tree has 2 dimensions.
+    // When inserting points, the max coordinates are optional.
+    rtree_insert(tr, (double[2]){phx.lon, phx.lat}, NULL, &phx);
+    rtree_insert(tr, (double[2]){enn.lon, enn.lat}, NULL, &enn);
+    rtree_insert(tr, (double[2]){pra.lon, pra.lat}, NULL, &pra);
+    rtree_insert(tr, (double[2]){tai.lon, tai.lat}, NULL, &tai);
+    rtree_insert(tr, (double[2]){her.lon, her.lat}, NULL, &her);
+    rtree_insert(tr, (double[2]){him.lon, him.lat}, NULL, &him);
     
     printf("\n-- Northwestern cities --\n");
-    rtree_search(tr, (double[]){ -180, 0, 0, 90 }, city_iter, NULL);
+    rtree_search(tr, (double[2]){-180, 0}, (double[2]){0, 90}, city_iter, NULL);
 
     printf("\n-- Northeastern cities --\n");
-    rtree_search(tr, (double[]){ 0, 0, 180, 90 }, city_iter, NULL);
+    rtree_search(tr, (double[2]){0, 0}, (double[2]){180, 90}, city_iter, NULL);
 
-    // deleting an item is the same inserting
-    rtree_delete(tr, (double[]){ phx.lon, phx.lat, phx.lon, phx.lat }, &phx);
+    // Deleting an item is the same inserting
+    rtree_delete(tr, (double[2]){phx.lon, phx.lat}, NULL, &phx);
 
     printf("\n-- Northwestern cities --\n");
-    rtree_search(tr, (double[]){ -180, 0, 0, 90 }, city_iter, NULL);
+    rtree_search(tr, (double[2]){-180, 0}, (double[2]){0, 90}, city_iter, NULL);
 
     rtree_free(tr);
-
 }
 // output:
-// -- northwest cities --
+// -- Northwestern cities --
 // Phoenix
-// Ennis
-// Prague
 // Hermosillo
+// Ennis
 // 
-// -- northeast cities --
+// -- Northeastern cities --
+// Prague
 // Taipei
 // Himeji
 // 
-// -- northwest cities --
-// Ennis
-// Prague
+// -- Northwestern cities --
 // Hermosillo
+// Ennis
 ```
 
 ## Functions
@@ -101,27 +96,48 @@ rtree_delete   # delete an item
 rtree_search   # search the rtree
 ```
 
+## Generic interface
+
+By default this implementation is set to 2 dimensions, using doubles as the
+numeric coordinate type, and `void *` as the data type.
+
+The `rtree.c` and `rtree.h` files can be easily customized to change these
+settings.
+
+Please find the type parameters at the top of the `rtree.c` file:
+
+```c
+#define DATATYPE void * 
+#define NUMTYPE double
+#define DIMS 2
+#define MAX_ENTRIES 64
+```
+
+Change these to suit your needs, then modify the `rtree.h` file to match.
+
 ## Algorithms
 
-This implementation is a [variant](https://github.com/tidwall/rtree#algorithms) of the original paper:  
-[R-TREES. A DYNAMIC INDEX STRUCTURE FOR SPATIAL SEARCHING](http://www-db.deis.unibo.it/courses/SI-LS/papers/Gut84.pdf)
-
+This implementation is a custom [variant](https://github.com/tidwall/rtree#algorithms) of the original paper [R-TREES. A DYNAMIC INDEX STRUCTURE FOR SPATIAL SEARCHING](http://www-db.deis.unibo.it/courses/SI-LS/papers/Gut84.pdf). It was originally designed for [Tile38](https://github.com/tidwall/tile38) and is highly optimized.
 
 ## Testing and benchmarks
 
-The `rtree.c` file also contains robust testing and benchmark code.
+The `tests.c` file contains tests and benchmarks.
 
 ```sh
-$ cc -DRTREE_TEST rtree.c && ./a.out              # run tests
-$ cc -DRTREE_TEST -O3 rtree.c && BENCH=1 ./a.out  # run benchmarks
+$ cc -O3 tests.c rtree.c && ./a.out 
 ```
 
-The following benchmarks were run on my 2019 Macbook Pro (2.4 GHz 8-Core Intel Core i9) using gcc-9. One million random (evenly distributed) rectangles are inserted, searched, and deleted.
+The following benchmarks were run on Ubuntu 20.04 (3.4GHz 16-Core AMD Ryzen 9 5950X) using gcc-12. 
+One million random (evenly distributed) points are inserted, searched, deleted, and replaced.
 
 ```
-insert   1000000 ops in 0.406 secs, 406 ns/op, 2462496 op/sec
-search   1000000 ops in 0.936 secs, 936 ns/op, 1068225 op/sec
-delete   1000000 ops in 0.901 secs, 901 ns/op, 1109395 op/sec
+insert         1000000 ops in 0.300 secs, 300 ns/op, 3330769 op/sec
+search-item    1000000 ops in 0.267 secs, 267 ns/op, 3743566 op/sec
+search-1%      1000 ops in 0.002 secs, 1976 ns/op, 506073 op/sec
+search-5%      1000 ops in 0.016 secs, 15764 ns/op, 63436 op/sec
+search-10%     1000 ops in 0.051 secs, 51303 ns/op, 19492 op/sec
+delete         1000000 ops in 0.359 secs, 359 ns/op, 2788016 op/sec
+replace        1000000 ops in 0.548 secs, 548 ns/op, 1823769 op/sec
 ```
 
 ## License
