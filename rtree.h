@@ -17,5 +17,9 @@ void rtree_search(struct rtree *tr, const double *min, const double *max,
     void *udata);
 size_t rtree_count(struct rtree *tr);
 void rtree_delete(struct rtree *tr, const double *min, const double *max, const void *data);
+void rtree_delete_with_comparator(struct rtree *tr, const double *min, 
+    const double *max, const void *data,
+    int (*compare)(const void *a, const void *b, void *udata),
+    void *udata);
 
 #endif // RTREE_H

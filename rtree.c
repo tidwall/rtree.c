@@ -610,18 +610,23 @@ static size_t _rtree_count(struct rtree *tr) {
 }
 
 static void node_delete(struct rtree *tr, struct rect *nr, struct node *node, 
-    struct rect *ir, struct item item, bool *removed, bool *shrunk)
+    struct rect *ir, struct item item, bool *removed, bool *shrunk,
+    int (*compare)(const DATATYPE a, const DATATYPE b, void *udata),
+    void *udata)
 {
     *removed = false;
     *shrunk = false;
     if (node->kind == LEAF) {
         for (int i = 0; i < node->count; i++) {
-            if (!rect_contains(ir, &node->rects[i]) || 
-                node->items[i].data != item.data) 
-            {
+            if (!rect_contains(ir, &node->rects[i])) {
                 continue;
             }
-
+            int cmp = compare ?
+                compare(node->items[i].data, item.data, udata) :
+                memcmp(&node->items[i].data, &item.data, sizeof(DATATYPE));
+            if (cmp != 0) {
+                continue;
+            }
             // Found the target item to delete.
             memmove(&node->rects[i], &node->rects[i+1], 
                 (node->count-(i+1))*sizeof(struct rect));
@@ -646,7 +651,7 @@ static void node_delete(struct rtree *tr, struct rect *nr, struct node *node,
         }
         struct rect crect = node->rects[i];
         node_delete(tr, &node->rects[i], node->children[i], ir, item, removed,
-            shrunk);
+            shrunk, compare, udata);
         if (!*removed) {
             continue;
         }
@@ -674,7 +679,11 @@ static void node_delete(struct rtree *tr, struct rect *nr, struct node *node,
     return;
 }
 
-static void _rtree_delete(struct rtree *tr, const NUMTYPE *min, const NUMTYPE *max, const DATATYPE data) {
+static void _rtree_delete(struct rtree *tr, const NUMTYPE *min, 
+    const NUMTYPE *max, const DATATYPE data,
+    int (*compare)(const DATATYPE a, const DATATYPE b, void *udata),
+    void *udata)
+{
     struct rect rect;
     memcpy(&rect.min[0], min, sizeof(NUMTYPE)*DIMS);
     memcpy(&rect.max[0], max?max:min, sizeof(NUMTYPE)*DIMS);
@@ -685,7 +694,8 @@ static void _rtree_delete(struct rtree *tr, const NUMTYPE *min, const NUMTYPE *m
     }
     bool removed = false;
     bool shrunk = false;
-    node_delete(tr, &tr->rect, tr->root, &rect, item, &removed, &shrunk);
+    node_delete(tr, &tr->rect, tr->root, &rect, item, &removed, &shrunk, 
+        compare, udata);
     if (!removed) {
         return;
     }
@@ -858,10 +868,25 @@ size_t rtree_count(struct rtree *tr) {
 }
 
 // rtree_delete deletes an item from the rtree. 
+// This searches the tree for an item that is contained within the provided
+// rectangle, and perform a binary comparison of its data to the provided
+// data. The first item that is found is deleted.
 void rtree_delete(struct rtree *tr, const NUMTYPE *min, const NUMTYPE *max, 
     const DATATYPE data)
 {
-    return _rtree_delete(tr, min, max, data);
+    return _rtree_delete(tr, min, max, data, NULL, NULL);
+}
+
+// rtree_delete_with_comparator deletes an item from the rtree.
+// This searches the tree for an item that is contained within the provided
+// rectangle, and perform a comparison of its data to the provided data using
+// a compare function. The first item that is found is deleted.
+void rtree_delete_with_comparator(struct rtree *tr, const NUMTYPE *min, 
+    const NUMTYPE *max, const DATATYPE data,
+    int (*compare)(const DATATYPE a, const DATATYPE b, void *udata),
+    void *udata)
+{
+    return _rtree_delete(tr, min, max, data, compare, udata);
 }
 
 void rtree_write_svg(struct rtree *tr, const char *path) {
