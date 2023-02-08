@@ -250,6 +250,7 @@ static bool search_iter(const double *min, const double *max, const void *item, 
 }
 
 struct search_iter_one_context {
+    double *point;
     void *data;
     int count;
 };
@@ -257,6 +258,8 @@ struct search_iter_one_context {
 static bool search_iter_one(const double *min, const double *max, const void *data, void *udata) {
     struct search_iter_one_context *ctx = (struct search_iter_one_context *)udata;
     if (data == ctx->data) {
+        assert(memcmp(min, ctx->point, sizeof(double)*2) == 0);
+        assert(memcmp(max, ctx->point, sizeof(double)*2) == 0);
         ctx->count++;
         return false;
     }
@@ -495,8 +498,10 @@ void test_rand_bench(bool hilbert_ordered) {
 
     // sort_points(points, N);
     bench("search-item", N, {
-        struct search_iter_one_context ctx = { .data= (void *)(uintptr_t)(i) };
         double *point = &points[i*2];
+        struct search_iter_one_context ctx = { 0 };
+        ctx.point = point;
+        ctx.data = (void *)(uintptr_t)(i);
         rtree_search(tr, point, point, search_iter_one, &ctx);
         assert(ctx.count == 1);
     });
@@ -574,8 +579,10 @@ void test_rand_bench(bool hilbert_ordered) {
 
 
     bench("search-item", N, {
-        struct search_iter_one_context ctx = { .data= (void *)(uintptr_t)(i) };
         double *point = &points[i*2];
+        struct search_iter_one_context ctx = { 0 };
+        ctx.point = point;
+        ctx.data = (void *)(uintptr_t)(i);
         rtree_search(tr, point, point, search_iter_one, &ctx);
         assert(ctx.count == 1);
     });
