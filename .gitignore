@@ -2,3 +2,4 @@
 a.out
 *.svg
 .vscode/
+*.o

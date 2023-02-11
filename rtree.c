@@ -796,7 +796,7 @@ bool rtree_insert(struct rtree *tr, const NUMTYPE *min, const NUMTYPE *max,
 }
 
 void rtree_free(struct rtree *tr) {
-    return _rtree_free(tr);
+    _rtree_free(tr);
 }
 
 void rtree_search(struct rtree *tr, const NUMTYPE *min, const NUMTYPE *max,
@@ -804,7 +804,7 @@ void rtree_search(struct rtree *tr, const NUMTYPE *min, const NUMTYPE *max,
         void *udata), 
     void *udata)
 {
-    return _rtree_search(tr, min, max, iter, udata);
+    _rtree_search(tr, min, max, iter, udata);
 }
 
 // rtree_count returns the number of items in the rtree.
@@ -819,7 +819,7 @@ size_t rtree_count(struct rtree *tr) {
 void rtree_delete(struct rtree *tr, const NUMTYPE *min, const NUMTYPE *max, 
     const DATATYPE data)
 {
-    return _rtree_delete(tr, min, max, data, NULL, NULL);
+    _rtree_delete(tr, min, max, data, NULL, NULL);
 }
 
 // rtree_delete_with_comparator deletes an item from the rtree.
@@ -831,13 +831,13 @@ void rtree_delete_with_comparator(struct rtree *tr, const NUMTYPE *min,
     int (*compare)(const DATATYPE a, const DATATYPE b, void *udata),
     void *udata)
 {
-    return _rtree_delete(tr, min, max, data, compare, udata);
+    _rtree_delete(tr, min, max, data, compare, udata);
 }
 
 void rtree_write_svg(struct rtree *tr, const char *path) {
-    return _rtree_write_svg(tr, path);
+    _rtree_write_svg(tr, path);
 }
 
 void rtree_check(struct rtree *tr) {
-    return _rtree_check(tr);
+    _rtree_check(tr);
 }

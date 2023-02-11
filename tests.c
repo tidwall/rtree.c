@@ -1,4 +1,7 @@
-// cc -O3 -Wall tests.c rtree.c && ./a.out
+/* 
+cc -O3 -Wall -Werror -Wextra -pedantic -c -o rtree.o rtree.c
+cc -O3 tests.c rtree.o && ./a.out
+*/
 
 #include <stdlib.h>
 #include <stdio.h>
