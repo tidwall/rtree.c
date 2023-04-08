@@ -2,7 +2,7 @@
 
 An [R-tree](https://en.wikipedia.org/wiki/R-tree) implementation in C. 
 
-<img src="cities.png" width="512" height="256" border="0" alt="Cities">
+<img src="cities.png" border="0" alt="Cities">
 
 ## Features
 
