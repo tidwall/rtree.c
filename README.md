@@ -8,6 +8,8 @@ An [R-tree](https://en.wikipedia.org/wiki/R-tree) implementation in C.
 
 - [Generic interface](#generic-interface) for multiple dimensions and data types
 - Supports custom allocators
+- Copy-on-write support
+- Includes [test suite](#testing-and-benchmarks) with 100% coverage.
 - [Very fast](#testing-and-benchmarks) 🚀
 
 ## Example
@@ -90,10 +92,11 @@ int main() {
 ```sh
 rtree_new      # allocate a new rtree
 rtree_free     # free the rtree
-rtree_count    # return number of items
+rtree_count    # return number of items in rtree
 rtree_insert   # insert an item
 rtree_delete   # delete an item
-rtree_search   # search the rtree
+rtree_search   # search the rtree for items with interecting rectangles
+rtree_clone    # make an clone of the rtree using a copy-on-write technique
 ```
 
 ## Generic interface
@@ -117,23 +120,45 @@ Change these to suit your needs, then modify the `rtree.h` file to match.
 
 ## Testing and benchmarks
 
-The `tests.c` file contains tests and benchmarks.
-
 ```sh
-$ cc -O3 tests.c rtree.c && ./a.out 
+$ tests/run.sh         # run tests
+$ tests/run.sh bench   # run benchmarks
 ```
 
 The following benchmarks were run on Ubuntu 20.04 (3.4GHz 16-Core AMD Ryzen 9 5950X) using gcc-12. 
 One million random (evenly distributed) points are inserted, searched, deleted, and replaced.
 
 ```
-insert         1000000 ops in 0.300 secs, 300 ns/op, 3330769 op/sec
-search-item    1000000 ops in 0.267 secs, 267 ns/op, 3743566 op/sec
-search-1%      1000 ops in 0.002 secs, 1976 ns/op, 506073 op/sec
-search-5%      1000 ops in 0.016 secs, 15764 ns/op, 63436 op/sec
-search-10%     1000 ops in 0.051 secs, 51303 ns/op, 19492 op/sec
-delete         1000000 ops in 0.359 secs, 359 ns/op, 2788016 op/sec
-replace        1000000 ops in 0.548 secs, 548 ns/op, 1823769 op/sec
+-- RANDOM ORDER --
+insert          1,000,000 ops in 0.247 secs    246.7 ns/op   4,053,358 op/sec
+search-item     1,000,000 ops in 0.249 secs    248.6 ns/op   4,022,946 op/sec
+search-1%           1,000 ops in 0.002 secs   1855.0 ns/op     539,083 op/sec
+search-5%           1,000 ops in 0.016 secs  16283.0 ns/op      61,413 op/sec
+search-10%          1,000 ops in 0.052 secs  51933.0 ns/op      19,255 op/sec
+delete          1,000,000 ops in 0.265 secs    265.2 ns/op   3,771,307 op/sec
+replace         1,000,000 ops in 0.464 secs    464.3 ns/op   2,153,816 op/sec
+search-item     1,000,000 ops in 0.246 secs    245.6 ns/op   4,072,175 op/sec
+search-1%           1,000 ops in 0.002 secs   1839.0 ns/op     543,773 op/sec
+search-5%           1,000 ops in 0.017 secs  16504.0 ns/op      60,591 op/sec
+search-10%          1,000 ops in 0.053 secs  52512.0 ns/op      19,043 op/sec
+```
+
+The following benchmarks are the same as above but the points are ordered on a
+[hilbert curve](https://en.wikipedia.org/wiki/Hilbert_curve).
+
+```
+-- HILBERT ORDER --
+insert          1,000,000 ops in 0.156 secs    155.6 ns/op   6,428,263 op/sec
+search-item     1,000,000 ops in 0.091 secs     91.3 ns/op  10,952,902 op/sec
+search-1%           1,000 ops in 0.002 secs   2199.0 ns/op     454,752 op/sec
+search-5%           1,000 ops in 0.017 secs  17124.0 ns/op      58,397 op/sec
+search-10%          1,000 ops in 0.049 secs  49158.0 ns/op      20,342 op/sec
+delete          1,000,000 ops in 0.105 secs    105.1 ns/op   9,513,842 op/sec
+replace         1,000,000 ops in 0.272 secs    272.1 ns/op   3,674,822 op/sec
+search-item     1,000,000 ops in 0.076 secs     75.9 ns/op  13,169,157 op/sec
+search-1%           1,000 ops in 0.002 secs   2203.0 ns/op     453,926 op/sec
+search-5%           1,000 ops in 0.019 secs  18975.0 ns/op      52,700 op/sec
+search-10%          1,000 ops in 0.056 secs  55982.0 ns/op      17,862 op/sec
 ```
 
 ## Algorithms

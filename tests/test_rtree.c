@@ -1,273 +1,4 @@
-/* 
-cc -O3 -Wall -Werror -Wextra -pedantic -c -o rtree.o rtree.c
-cc -O3 tests.c rtree.o && ./a.out
-*/
-
-#include <stdlib.h>
-#include <stdio.h>
-#include <string.h>
-#include <stdint.h>
-#include <stdbool.h>
-#include <errno.h>
-#include <time.h>
-#include <time.h>
-#include <assert.h>
-#include <stdbool.h>
-
-#include "rtree.h"
-
-void rtree_check(struct rtree *tr);
-void rtree_write_svg(struct rtree *tr, const char *path);
-
-#define panic(_msg_) { \
-    fprintf(stderr, "panic: %s (%s:%d)\n", (_msg_), __FILE__, __LINE__); \
-    exit(1); \
-}
-
-void rand_seed(int64_t seed) {
-    srand((unsigned int)seed);
-}
-
-int64_t rand_gen_seed_u() {
-    int64_t seed;
-    FILE *urandom = fopen("/dev/urandom", "r");
-    if (!urandom) {
-        panic(strerror(errno));
-    }
-    if (fread(&seed, sizeof(int64_t), 1, urandom) != 1) {
-        panic(strerror(errno));
-    }
-    fclose(urandom);
-    return seed;
-}
-
-
-double rand_double() {
-    return (double)rand() / ((double)RAND_MAX+1);
-}
-
-uint64_t rand_uint64() {
-    return ((((uint64_t)rand())&0xFFFFFF)<<0) |
-        ((((uint64_t)rand())&0xFFFFFF)<<24) |
-        ((((uint64_t)rand())&0xFFFFFF)<<48);
-}
-
-
-#define bench(name, N, code) {{ \
-    if (strlen(name) > 0) { \
-        printf("%-14s ", name); \
-    } \
-    size_t tmem = total_mem; \
-    size_t tallocs = total_allocs; \
-    uint64_t bytes = 0; \
-    clock_t begin = clock(); \
-    for (int i = 0; i < N; i++) { \
-        (code); \
-    } \
-    clock_t end = clock(); \
-    double elapsed_secs = (double)(end - begin) / CLOCKS_PER_SEC; \
-    double bytes_sec = (double)bytes/elapsed_secs; \
-    printf("%d ops in %.3f secs, %.0f ns/op, %.0f op/sec", \
-        N, elapsed_secs, \
-        elapsed_secs/(double)N*1e9, \
-        (double)N/elapsed_secs \
-    ); \
-    if (bytes > 0) { \
-        printf(", %.1f GB/sec", bytes_sec/1024/1024/1024); \
-    } \
-    if (total_mem > tmem) { \
-        size_t used_mem = total_mem-tmem; \
-        printf(", %.2f bytes/op", (double)used_mem/N); \
-    } \
-    if (total_allocs > tallocs) { \
-        size_t used_allocs = total_allocs-tallocs; \
-        printf(", %.2f allocs/op", (double)used_allocs/N); \
-    } \
-    printf("\n"); \
-}}
-
-
-static uintptr_t total_allocs = 0;
-static uintptr_t total_mem = 0;
-
-static void *xmalloc(size_t size) {
-    void *mem = malloc(sizeof(uintptr_t)+size);
-    assert(mem);
-    *(uintptr_t*)mem = size;
-    total_allocs++;
-    total_mem += size;
-    return (char*)mem+sizeof(uintptr_t);
-}
-
-static void xfree(void *ptr) {
-    if (ptr) {
-        total_mem -= *(uintptr_t*)((char*)ptr-sizeof(uintptr_t));
-        free((char*)ptr-sizeof(uintptr_t));
-        total_allocs--;
-    }
-}
-
-
-// Ported from C++ https://github.com/rawrunprotected/hilbert_curves (public domain)
-#include <stdint.h>
-
-uint32_t interleave(uint32_t x) {
-	x = (x | (x << 8)) & 0x00FF00FF;
-	x = (x | (x << 4)) & 0x0F0F0F0F;
-	x = (x | (x << 2)) & 0x33333333;
-	x = (x | (x << 1)) & 0x55555555;
-	return x;
-}
-
-uint32_t hilbertXYToIndex_logarithmic(uint32_t x, uint32_t y) {
-  uint32_t A, B, C, D;
-
-  // Initial prefix scan round, prime with x and y
-  {
-    uint32_t a = x ^ y;
-    uint32_t b = 0xFFFF ^ a;
-    uint32_t c = 0xFFFF ^ (x | y);
-    uint32_t d = x & (y ^ 0xFFFF);
-
-    A = a | (b >> 1);
-    B = (a >> 1) ^ a;
-
-    C = ((c >> 1) ^ (b & (d >> 1))) ^ c;
-    D = ((a & (c >> 1)) ^ (d >> 1)) ^ d;
-  }
-
-  {
-    uint32_t a = A;
-    uint32_t b = B;
-    uint32_t c = C;
-    uint32_t d = D;
-
-    A = ((a & (a >> 2)) ^ (b & (b >> 2)));
-    B = ((a & (b >> 2)) ^ (b & ((a ^ b) >> 2)));
-
-    C ^= ((a & (c >> 2)) ^ (b & (d >> 2)));
-    D ^= ((b & (c >> 2)) ^ ((a ^ b) & (d >> 2)));
-  }
-
-  {
-    uint32_t a = A;
-    uint32_t b = B;
-    uint32_t c = C;
-    uint32_t d = D;
-
-    A = ((a & (a >> 4)) ^ (b & (b >> 4)));
-    B = ((a & (b >> 4)) ^ (b & ((a ^ b) >> 4)));
-
-    C ^= ((a & (c >> 4)) ^ (b & (d >> 4)));
-    D ^= ((b & (c >> 4)) ^ ((a ^ b) & (d >> 4)));
-  }
-
-  // Final round and projection
-  {
-    uint32_t a = A;
-    uint32_t b = B;
-    uint32_t c = C;
-    uint32_t d = D;
-
-    C ^= ((a & (c >> 8)) ^ (b & (d >> 8)));
-    D ^= ((b & (c >> 8)) ^ ((a ^ b) & (d >> 8)));
-  }
-
-  // Undo transformation prefix scan
-  uint32_t a = C ^ (C >> 1);
-  uint32_t b = D ^ (D >> 1);
-
-  // Recover index bits
-  uint32_t i0 = x ^ y;
-  uint32_t i1 = b | (0xFFFF ^ (i0 | a));
-
-  return (interleave(i1) << 1) | interleave(i0);
-}
-
-// These are multiplication tables of the alternating group A4,
-// preconvolved with the mapping between Morton and Hilbert curves.
-static const uint8_t mortonToHilbertTable[] = {
-	48, 33, 27, 34, 47, 78, 28, 77,
-	66, 29, 51, 52, 65, 30, 72, 63,
-	76, 95, 75, 24, 53, 54, 82, 81,
-	18,  3, 17, 80, 61,  4, 62, 15,
-	 0, 59, 71, 60, 49, 50, 86, 85,
-	84, 83,  5, 90, 79, 56,  6, 89,
-	32, 23,  1, 94, 11, 12,  2, 93,
-	42, 41, 13, 14, 35, 88, 36, 31,
-	92, 37, 87, 38, 91, 74,  8, 73,
-	46, 45,  9, 10,  7, 20, 64, 19,
-	70, 25, 39, 16, 69, 26, 44, 43,
-	22, 55, 21, 68, 57, 40, 58, 67,
-};
-
-static const uint8_t hilbertToMortonTable[] = {
-	48, 33, 35, 26, 30, 79, 77, 44,
-	78, 68, 64, 50, 51, 25, 29, 63,
-	27, 87, 86, 74, 72, 52, 53, 89,
-	83, 18, 16,  1,  5, 60, 62, 15,
-	 0, 52, 53, 57, 59, 87, 86, 66,
-	61, 95, 91, 81, 80,  2,  6, 76,
-	32,  2,  6, 12, 13, 95, 91, 17,
-	93, 41, 40, 36, 38, 10, 11, 31,
-	14, 79, 77, 92, 88, 33, 35, 82,
-	70, 10, 11, 23, 21, 41, 40,  4,
-	19, 25, 29, 47, 46, 68, 64, 34,
-	45, 60, 62, 71, 67, 18, 16, 49,
-};
-
-uint32_t transformCurve(uint32_t in, uint32_t bits, const uint8_t* lookupTable) {
-	uint32_t transform = 0;
-	uint32_t out = 0;
-	for (int32_t i = 3 * (bits - 1); i >= 0; i -= 3) {
-		transform = lookupTable[transform | ((in >> i) & 7)];
-		out = (out << 3) | (transform & 7);
-		transform &= ~7;
-	}
-	return out;
-}
-
-uint32_t mortonToHilbert3D(uint32_t mortonIndex, uint32_t bits) {
-	return transformCurve(mortonIndex, bits, mortonToHilbertTable);
-}
-
-uint32_t hilbertToMorton3D(uint32_t hilbertIndex, uint32_t bits) {
-	return transformCurve(hilbertIndex, bits, hilbertToMortonTable);
-}
-
-uint32_t hilbert(double lat, double lon) {
-    uint32_t x = ((lon + 180.0) / 360.0) * 0xFFFF;
-    uint32_t y = ((lat + 90.0) / 180.0) * 0xFFFF;
-    return hilbertXYToIndex_logarithmic(x, y);
-}
-
-
-
-#pragma GCC diagnostic ignored "-Wpragmas"
-#pragma GCC diagnostic ignored "-Wextra"
-#pragma GCC diagnostic ignored "-Wcompound-token-split-by-macro"
-
-static bool search_iter(const double *min, const double *max, const void *item, void *udata) {
-    (*(int*)udata)++;
-    return true;
-}
-
-struct search_iter_one_context {
-    double *point;
-    void *data;
-    int count;
-};
-
-static bool search_iter_one(const double *min, const double *max, const void *data, void *udata) {
-    struct search_iter_one_context *ctx = (struct search_iter_one_context *)udata;
-    if (data == ctx->data) {
-        assert(memcmp(min, ctx->point, sizeof(double)*2) == 0);
-        assert(memcmp(max, ctx->point, sizeof(double)*2) == 0);
-        ctx->count++;
-        return false;
-    }
-    return true;
-}
+#include "tests.h"
 
 double predef[] = {-52.9434,2.3502,79.7989,0.0965,-70.7779,57.1756,36.2933,77.0761,21.4716,3.4453,-14.5109,-18.9968,-33.9442,-11.1449,10.3230,-66.1787,-76.7850,-68.3149,48.2775,-57.6251,1.8490,32.8058,-6.3306,-50.2694,-11.0860,-26.7247,-71.1707,-77.4811,-40.9573,-81.1828,13.3053,26.7539,-15.3284,-43.5700,-16.2263,30.5950,53.7956,42.5554,-17.4207,-45.7420,28.6247,-73.9760,-47.9121,-24.0529,20.3135,81.6178,-75.7848,-61.4280,60.6492,45.6531,32.6774,-1.8117,6.7576,-30.7179,36.9515,84.9250,22.8975,23.5716,
 -1.0784,-66.1536,80.9594,-43.7432,47.2764,-59.5494,16.6996,7.8703,-67.1000,-64.3771,-5.6678,45.6234,15.5682,11.4618,-70.3210,36.6239,-27.7830,21.0051,-32.8146,0.4812,-80.1441,-61.4365,-9.8833,-60.8014,-70.2467,-37.1890,-40.2480,-35.0243,0.3481,-59.1803,-1.3824,11.9884,38.1801,-86.4870,41.1855,-43.7043,-49.6251,-46.7210,70.0259,82.8820,2.0714,-57.8324,-32.0670,61.0331,57.2634,-77.8351,22.5605,30.6484,13.3030,-74.1716,-51.8567,-38.8966,65.7489,0.6785,-43.7919,40.2813,13.5196,52.1255,
@@ -393,254 +124,142 @@ double cities[] = {27.0500,57.4167,13.2000,47.3500,103.4167,4.2500,-71.0495,42.3
 -1.5000,52.9333,-57.6000,6.4000,16.8094,45.1767,9.5681,4.5092,28.2167,55.5667,87.3333,26.9833,33.4342,16.6914,-64.1667,10.4667,42.6872,37.1442,11.2500,43.7667,5.8528,51.8425,47.9783,29.3697,53.5425,36.6944,6.1636,49.5650,-92.0500,14.9000,44.8108,41.4636,120.8492,14.9017,4.7083,52.0167,105.9139,20.5411,-87.4500,15.7833,73.7000,30.4500,-55.9333,-26.0333,22.9250,40.5003,21.4547,41.4253,101.0031,14.5881,-84.0528,9.9461,-92.0000,14.9333,25.1831,59.3664,72.9008,32.2658,109.1167,-6.9333,50.0039,40.5328,17.9962,49.3387,90.7181,23.9208,119.8861,29.4603,-87.8386,13.7836,-65.1333,-16.9833,67.6981,36.6953,-77.0500,-12.0500,33.5708,34.8500,33.1833,-12.3000,22.8578,41.7031,6.9167,46.4500,-79.9000,-2.1667,48.5333,-20.5833,9.6167,36.3500,1.3333,47.5833,-7.4500,55.1333,-61.2167,13.1333,8.2833,47.0333,-88.8167,15.4833,-71.4461,10.4019,6.0850,46.2170,36.5833,35.3667,35.4833,30.3167,16.0500,48.3333,175.2000,-38.1833,89.8833,27.5333,-57.3167,-30.7333,6.1639,52.2550,29.0167,-24.1833,11.0022,59.2324,7.3959,47.1921,-84.7833,9.9833,41.6947,41.6753,79.1000,21.1500,-78.9567,-4.0692,9.3667,36.0833,-79.2217,-7.7914,120.2828,14.8292,-6.9100,30.9200,22.3333,47.9500,22.6833,-14.9667,23.5414,58.9431,-56.0983,-34.7422,73.3333,5.4333,-73.8833,18.2000,-77.4667,18.0667,6.7333,0.3333,73.4333,31.3333,25.6000,55.5000,8.7724,58.4618,16.3252,48.3052,-55.7167,-34.7333,10.5839,57.7209,46.3606,40.6828,7.3333,51.4333,73.2667,29.9833,107.4728,-6.8378,-76.2000,4.0867,16.6080,49.1952,120.7658,14.9164,139.8044,35.8203,34.6500,31.8167,73.8000,18.6167,114.8794,40.8100,-4.1000,48.0000,-42.5367,-19.4683,-74.8886,4.1528,8.5500,47.3667,22.4469,41.9228,-6.5700,34.2600,50.1492,37.1953,109.3000,13.0833,147.3667,-35.1167,-65.4533,-19.5506,-66.2333,-20.9333,19.6358,40.5306,-0.3960,51.6553,7.0000,51.0333,2.6000,8.8833,9.9361,49.7878,39.1833,6.9833,-104.6178,50.4501,73.0300,26.2867,103.4500,4.5167,-86.0833,14.7167,-79.2392,-7.9589,-8.7500,41.3500,46.5833,-21.1500,48.5450,39.4583,44.7025,39.8303,-57.1500,-25.3833,-72.7111,-16.6228,
 -57.8738,-21.0415,-90.8075,14.4803,100.2000,6.4333,18.0269,45.1903};
 
-
-void test_predef_svg() {
-    printf("-- PREDEF --\n");
-    struct rtree *tr = rtree_new_with_allocator(xmalloc, xfree);
+void test_rtree_predef_svg(void) {
+    struct rtree *tr;
+    while (!(tr = rtree_new_with_allocator(xmalloc, xfree))){}
     int N = sizeof(predef)/(sizeof(double)*2);
     for (int i = 0; i < N; i++) {
         double *point = &predef[i*2];
-        rtree_insert(tr, point, point, (void *)(uintptr_t)i);
+        while (!rtree_insert(tr, point, point, (void *)(uintptr_t)i)){}
     }
     rtree_write_svg(tr, "predefined.svg");
     rtree_free(tr);
 }
 
-
-void test_cities_svg() {
-    printf("-- CITIES --\n");
-    struct rtree *tr = rtree_new_with_allocator(xmalloc, xfree);
+void test_rtree_cities_svg(void) {
+    struct rtree *tr;
+    while (!(tr = rtree_new_with_allocator(xmalloc, xfree))){}
     int N = sizeof(cities)/(sizeof(double)*2);
     for (int i = 0; i < N; i++) {
         double *point = &cities[i*2];
-        rtree_insert(tr, point, point, (void *)(uintptr_t)i);
+        while (!rtree_insert(tr, point, point, (void *)(uintptr_t)i)){}
     }
     rtree_write_svg(tr, "cities.svg");
     rtree_free(tr);
 }
 
-int point_compare(const void *a, const void *b) {
-    const double *p1 = a;
-    const double *p2 = b;
-    uint32_t h1 = hilbert(p1[1],p1[0]);
-    uint32_t h2 = hilbert(p2[1],p2[0]);
 
-    if (h1 < h2) {
-        return -1;
-    }
-    if (h1 > h2) {
-        return 1;
-    }
-    return 0;
-
-    if (p1[0] < p2[0]) {
-        return -1;
-    }
-    if (p1[0] > p2[0]) {
-        return 1;
-    }
-    return 0;
-}
-
-void sort_points(double *points, int N) {
-    qsort(points, N, sizeof(double)*2, point_compare);
+int comparator(const void *a, const void *b, void *udata) {
+    assert(*(int*)udata == 9876);
+    return a < b ? -1 : a > b;
 } 
 
+struct iter_scan_all_ctx {
+    size_t count;
+};
 
-static void shuffle(void *array, size_t n, size_t size) {
-    char tmp[size];
-    char *arr = array;
-    size_t stride = size * sizeof(char);
-    if (n > 1) {
-        size_t i;
-        for (i = 0; i < n - 1; ++i) {
-            size_t rnd = (size_t) rand();
-            size_t j = i + rnd / (RAND_MAX / (n - i) + 1);
-            memcpy(tmp, arr + j * stride, size);
-            memcpy(arr + j * stride, arr + i * stride, size);
-            memcpy(arr + i * stride, tmp, size);
+bool iter_scan_all(const double *min, const double *max, const void *data,
+    void *udata)
+{
+    (void)min; (void)max; (void)data;
+    struct iter_scan_all_ctx *ctx = udata;
+    ctx->count++;
+    return true;
+}
+
+struct iter_two_ctx {
+    size_t count;
+};
+
+bool iter_two(const double *min, const double *max, const void *data,
+    void *udata)
+{
+    (void)min; (void)max; (void)data;
+    struct iter_two_ctx *ctx = udata;
+    ctx->count++;
+    return ctx->count < 2;
+}
+
+
+void test_rtree_ops(void) {
+    int N = 100000;
+    double *coords;
+    while (!(coords = xmalloc(sizeof(double)*N*4))) {}
+    for (int i = 0; i < N; i++) {
+        fill_rand_rect(&coords[i*4]);
+    }
+    struct rtree *tr;
+    while (!(tr = rtree_new_with_allocator(xmalloc, xfree))){}
+    for (int i = 0; i < N; i++) {
+        double *min = &coords[i*4+0];
+        double *max = &coords[i*4+2];
+        void *data = (void *)(uintptr_t)i;
+        while (!rtree_insert(tr, min, max, data)){}
+        assert(find_one(tr, min, max, data, NULL, NULL));
+        assert(rtree_count(tr) == (size_t)(i+1));
+        if (i%1000==0) assert(rtree_check(tr));
+    }
+    assert(rtree_count(tr) == (size_t)N);
+    assert(rtree_check(tr));
+
+
+    // scan all items
+    struct iter_scan_all_ctx ctx0 = { 0 };
+    rtree_scan(tr, iter_scan_all, &ctx0);
+    assert(ctx0.count == rtree_count(tr));
+
+    struct iter_two_ctx ctx1 = { 0 };
+    rtree_scan(tr, iter_two, &ctx1);
+    assert(ctx1.count == 2);
+
+
+    // find two and stop
+    struct iter_two_ctx ctx = { 0 };
+    rtree_search(tr, (double[2]){ -180.0, -90.0 }, (double[2]){ 180.0, 90.0 }, 
+        iter_two, &ctx);
+    assert(ctx.count == 2);
+
+    for (int i = 0; i < N; i++) {
+        double *min = &coords[i*4+0];
+        double *max = &coords[i*4+2];
+        void *data = (void *)(uintptr_t)i;
+        assert(rtree_count(tr) == (size_t)(N-i));
+        assert(find_one(tr, min, max, data, NULL, NULL));
+        if (i % 2) {
+            int x = 9876;
+            while (!rtree_delete_with_comparator(tr, min, max, data,
+                comparator, &x)) {}
+        } else {
+            while (!rtree_delete(tr, min, max, data)){}
         }
+        assert(!find_one(tr, min, max, data, NULL, NULL));
+        assert(rtree_count(tr) == (size_t)(N-i-1));
+        if (i%1000==0) assert(rtree_check(tr));
+
+        while (!rtree_delete(tr, min, max, data)){}
+        assert(rtree_count(tr) == (size_t)(N-i-1));
+
     }
-}
+    assert(rtree_count(tr) == 0);
+    assert(rtree_check(tr));
 
-
-void shuffle_points(double *points, int N) {
-    shuffle(points, N, sizeof(double)*2);
-}
-
-double *make_random_points(int N) {
-    double *points = (double *)xmalloc(N*2*sizeof(double));
-    for (int i = 0; i < N; i++) {
-        points[i*2+0] = rand_double() * 360.0 - 180.0;;
-        points[i*2+1] = rand_double() * 180.0 - 90.0;;
-    }
-    return points;
-}
-
-void test_rand_bench(bool hilbert_ordered) {
-    if (hilbert_ordered) {
-        printf("-- HILBERT ORDER --\n");
-    } else {
-        printf("-- RANDOM ORDER --\n");
-    }
-    int N = 1000000;
-    double *points = make_random_points(N);
-    if (hilbert_ordered) {
-        sort_points(points, N);
-    }
-
-    struct rtree *tr = rtree_new_with_allocator(xmalloc, xfree);
-    bench("insert", N, {
-        double *point = &points[i*2];
-        rtree_insert(tr, point, point, (void *)(uintptr_t)(i));
-        assert(rtree_count(tr) == i+1);
-    });
-
-    rtree_check(tr);
-
-
-    // sort_points(points, N);
-    bench("search-item", N, {
-        double *point = &points[i*2];
-        struct search_iter_one_context ctx = { 0 };
-        ctx.point = point;
-        ctx.data = (void *)(uintptr_t)(i);
-        rtree_search(tr, point, point, search_iter_one, &ctx);
-        assert(ctx.count == 1);
-    });
-
-
-    bench("search-1%", 1000, {
-        const double p = 0.01;
-        double min[2];
-        double max[2];
-        min[0] = rand_double() * 360.0 - 180.0;
-        min[1] = rand_double() * 180.0 - 90.0;
-        max[0] = min[0] + 360.0*p;
-        max[1] = min[1] + 180.0*p;
-        int res = 0;
-        rtree_search(tr, min, max, search_iter, &res);
-        // printf("%d\n", res);
-    });
-
-    bench("search-5%", 1000, {
-        const double p = 0.05;
-        double min[2];
-        double max[2];
-        min[0] = rand_double() * 360.0 - 180.0;
-        min[1] = rand_double() * 180.0 - 90.0;
-        max[0] = min[0] + 360.0*p;
-        max[1] = min[1] + 180.0*p;
-        int res = 0;
-        rtree_search(tr, min, max, search_iter, &res);
-    });
-
-    bench("search-10%", 1000, {
-        const double p = 0.10;
-        double min[2];
-        double max[2];
-        min[0] = rand_double() * 360.0 - 180.0;
-        min[1] = rand_double() * 180.0 - 90.0;
-        max[0] = min[0] + 360.0*p;
-        max[1] = min[1] + 180.0*p;
-        int res = 0;
-        rtree_search(tr, min, max, search_iter, &res);
-    });
-
-    bench("delete", N, {
-        double *point = &points[i*2];
-        rtree_delete(tr, point, point, (void*)(uintptr_t)(i));
-        assert(rtree_count(tr) == N-i-1);
-    });
-
-    double *points2 = (double *)xmalloc(N*2*sizeof(double));
-    for (int i = 0; i < N; i++) {
-        double *point = &points[i*2];
-        rtree_insert(tr, point, point, (void*)(uintptr_t)(i));
-        assert(rtree_count(tr) == i+1);
-        double rsize = 0.01; // size of rectangle in degrees
-        points2[i*2+0] = points[i*2+0] + rand_double()*rsize - rsize/2;
-        points2[i*2+1] = points[i*2+1] + rand_double()*rsize - rsize/2;
-    }
-
-    bench("replace", N, {
-        assert(rtree_count(tr) == N);
-        double *point = &points[i*2];
-        rtree_delete(tr, point, point, (void*)(uintptr_t)(i));
-        assert(rtree_count(tr) == N-1);
-        double *point2 = &points2[i*2];
-        rtree_insert(tr, point2, point2, (void*)(uintptr_t)(i));
-        assert(rtree_count(tr) == N);
-    });
-
-    rtree_check(tr);
-
-
-    double *tmp = points;
-    points = points2;
-    points2 = tmp;
-
-
-    bench("search-item", N, {
-        double *point = &points[i*2];
-        struct search_iter_one_context ctx = { 0 };
-        ctx.point = point;
-        ctx.data = (void *)(uintptr_t)(i);
-        rtree_search(tr, point, point, search_iter_one, &ctx);
-        assert(ctx.count == 1);
-    });
-
-    bench("search-1%", 1000, {
-        const double p = 0.01;
-        double min[2];
-        double max[2];
-        min[0] = rand_double() * 360.0 - 180.0;
-        min[1] = rand_double() * 180.0 - 90.0;
-        max[0] = min[0] + 360.0*p;
-        max[1] = min[1] + 180.0*p;
-        int res = 0;
-        rtree_search(tr, min, max, search_iter, &res);
-        // printf("%d\n", res);
-    });
-
-    bench("search-5%", 1000, {
-        const double p = 0.05;
-        double min[2];
-        double max[2];
-        min[0] = rand_double() * 360.0 - 180.0;
-        min[1] = rand_double() * 180.0 - 90.0;
-        max[0] = min[0] + 360.0*p;
-        max[1] = min[1] + 180.0*p;
-        int res = 0;
-        rtree_search(tr, min, max, search_iter, &res);
-    });
-
-    bench("search-10%", 1000, {
-        const double p = 0.10;
-        double min[2];
-        double max[2];
-        min[0] = rand_double() * 360.0 - 180.0;
-        min[1] = rand_double() * 180.0 - 90.0;
-        max[0] = min[0] + 360.0*p;
-        max[1] = min[1] + 180.0*p;
-        int res = 0;
-        rtree_search(tr, min, max, search_iter, &res);
-    });
     rtree_free(tr);
-    xfree(points);
-    xfree(points2);
+    xfree(coords);
 }
 
-int main() {
-    rand_seed(rand_gen_seed_u());
+void test_rtree_various(void) {
+    struct rtree *tr = rtree_new();
+    assert(tr);
+    rtree_free(tr);
+}
 
-    test_predef_svg();
-    test_cities_svg();
-    test_rand_bench(false);
-    test_rand_bench(true);
-    printf("total_allocs=%lu, total_mem=%lu\n", total_allocs, total_mem);
-    assert(total_allocs == total_mem);
+
+int main(int argc, char **argv) {
+    seedrand();
+    do_chaos_test(test_rtree_ops);
+    do_chaos_test(test_rtree_cities_svg);
+    do_chaos_test(test_rtree_predef_svg);
+    do_test(test_rtree_various);
+
     return 0;
 }
-
-
