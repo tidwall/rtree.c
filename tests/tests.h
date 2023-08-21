@@ -1,6 +1,7 @@
 #ifndef TESTS_H
 #define TESTS_H
 
+#include <stddef.h>
 #include <unistd.h>
 #include <stdio.h>
 #include <stdint.h>
