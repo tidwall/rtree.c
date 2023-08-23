@@ -4,26 +4,6 @@
 // checker
 //////////////////
 
-static bool node_check_order(const struct node *node) {
-    for (int i = 1; i < node->count; i++) {
-        if (node->rects[i].min[0] < node->rects[i-1].min[0]) {
-            fprintf(stderr, "out of order\n");
-            return false;
-        }
-        if (node->kind == BRANCH) {
-            if (!node_check_order(node->children[i])) return false;
-        }
-    }
-    return true;
-}
-
-static bool rtree_check_order(const struct rtree *tr) {
-    if (tr->root) {
-        if (!node_check_order(tr->root)) return false;
-    }
-    return true;
-}
-
 static bool node_check_rect(const struct rect *rect, struct node *node) {
     struct rect rect2 = node_rect_calc(node);
     if (!rect_equals(rect, &rect2)){
@@ -32,7 +12,7 @@ static bool node_check_rect(const struct rect *rect, struct node *node) {
     }
     if (node->kind == BRANCH) {
         for (int i = 0; i < node->count; i++) {
-            if (!node_check_rect(&node->rects[i], node->children[i])) {
+            if (!node_check_rect(&node->rects[i], node->nodes[i])) {
                 return false;
             }
         }
@@ -53,7 +33,7 @@ static bool rtree_check_height(const struct rtree *tr) {
     while (node) {
         height++;
         if (node->kind == LEAF) break;
-        node = node->children[0];
+        node = node->nodes[0];
     }
     if (height != tr->height) {
         fprintf(stderr, "invalid height\n");
@@ -63,7 +43,6 @@ static bool rtree_check_height(const struct rtree *tr) {
 }
 
 bool rtree_check(const struct rtree *tr) {
-    if (!rtree_check_order(tr)) return false;
     if (!rtree_check_rects(tr)) return false;
     if (!rtree_check_height(tr)) return false;
     return true;
@@ -80,7 +59,7 @@ static void node_write_svg(const struct node *node, const struct rect *rect,
     if (node) {
         if (node->kind == BRANCH) {
             for (int i = 0; i < node->count; i++) {
-                node_write_svg(node->children[i], &node->rects[i], f, depth+1);
+                node_write_svg(node->nodes[i], &node->rects[i], f, depth+1);
             }
         } else {
             for (int i = 0; i < node->count; i++) {

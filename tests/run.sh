@@ -54,8 +54,8 @@ $CC --version
 
 if [[ "$1" == "bench" ]]; then
     echo "BENCHMARKING..."
-    echo $CC $CFLAGS ../rtree.c bench.c
-    $CC $CFLAGS ../rtree.c bench.c
+    echo $CC $CFLAGS ../rtree.c bench.c -lm
+    $CC $CFLAGS ../rtree.c bench.c -lm
     ./a.out $@
 else
     echo "For benchmarks: 'run.sh bench'"
@@ -76,7 +76,7 @@ else
             fi 
             if [[ "$f" != $p* ]]; then continue; fi
         fi
-        $CC $CFLAGS -o $f.test ../rtree.c $f
+        $CC $CFLAGS -o $f.test ../rtree.c  -lm $f
         if [[ "$WITHCOV" == "1" ]]; then
             MallocNanoZone=0 LLVM_PROFILE_FILE="$f.profraw" ./$f.test $@
         else

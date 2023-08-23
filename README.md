@@ -101,7 +101,7 @@ rtree_clone    # make an clone of the rtree using a copy-on-write technique
 
 ## Generic interface
 
-By default this implementation is set to 2 dimensions, using doubles as the
+This implementation is set to 2 dimensions, using doubles as the
 numeric coordinate type, and `void *` as the data type.
 
 The `rtree.c` and `rtree.h` files can be easily customized to change these
@@ -113,7 +113,7 @@ Please find the type parameters at the top of the `rtree.c` file:
 #define DATATYPE void * 
 #define NUMTYPE double
 #define DIMS 2
-#define MAX_ENTRIES 64
+#define MAXITEMS 64
 ```
 
 Change these to suit your needs, then modify the `rtree.h` file to match.
@@ -125,22 +125,22 @@ $ tests/run.sh         # run tests
 $ tests/run.sh bench   # run benchmarks
 ```
 
-The following benchmarks were run on Ubuntu 20.04 (3.4GHz 16-Core AMD Ryzen 9 5950X) using gcc-12. 
+The following benchmarks were run on Ubuntu 20.04 (3.4GHz 16-Core AMD Ryzen 9 5950X) using clang-17. 
 One million random (evenly distributed) points are inserted, searched, deleted, and replaced.
 
 ```
 -- RANDOM ORDER --
-insert          1,000,000 ops in 0.247 secs    246.7 ns/op   4,053,358 op/sec
-search-item     1,000,000 ops in 0.249 secs    248.6 ns/op   4,022,946 op/sec
+insert          1,000,000 ops in 0.156 secs    155.6 ns/op   6,426,817 op/sec
+search-item     1,000,000 ops in 0.230 secs    230.2 ns/op   4,344,218 op/sec
+search-1%           1,000 ops in 0.002 secs   1926.0 ns/op     519,210 op/sec
+search-5%           1,000 ops in 0.017 secs  16690.0 ns/op      59,916 op/sec
+search-10%          1,000 ops in 0.051 secs  50679.0 ns/op      19,732 op/sec
+delete          1,000,000 ops in 0.230 secs    230.1 ns/op   4,346,163 op/sec
+replace         1,000,000 ops in 0.355 secs    355.2 ns/op   2,815,014 op/sec
+search-item     1,000,000 ops in 0.241 secs    241.0 ns/op   4,148,585 op/sec
 search-1%           1,000 ops in 0.002 secs   1855.0 ns/op     539,083 op/sec
-search-5%           1,000 ops in 0.016 secs  16283.0 ns/op      61,413 op/sec
-search-10%          1,000 ops in 0.052 secs  51933.0 ns/op      19,255 op/sec
-delete          1,000,000 ops in 0.265 secs    265.2 ns/op   3,771,307 op/sec
-replace         1,000,000 ops in 0.464 secs    464.3 ns/op   2,153,816 op/sec
-search-item     1,000,000 ops in 0.246 secs    245.6 ns/op   4,072,175 op/sec
-search-1%           1,000 ops in 0.002 secs   1839.0 ns/op     543,773 op/sec
-search-5%           1,000 ops in 0.017 secs  16504.0 ns/op      60,591 op/sec
-search-10%          1,000 ops in 0.053 secs  52512.0 ns/op      19,043 op/sec
+search-5%           1,000 ops in 0.017 secs  16928.0 ns/op      59,073 op/sec
+search-10%          1,000 ops in 0.052 secs  52210.0 ns/op      19,153 op/sec
 ```
 
 The following benchmarks are the same as above but the points are ordered on a
@@ -148,17 +148,17 @@ The following benchmarks are the same as above but the points are ordered on a
 
 ```
 -- HILBERT ORDER --
-insert          1,000,000 ops in 0.156 secs    155.6 ns/op   6,428,263 op/sec
-search-item     1,000,000 ops in 0.091 secs     91.3 ns/op  10,952,902 op/sec
-search-1%           1,000 ops in 0.002 secs   2199.0 ns/op     454,752 op/sec
-search-5%           1,000 ops in 0.017 secs  17124.0 ns/op      58,397 op/sec
-search-10%          1,000 ops in 0.049 secs  49158.0 ns/op      20,342 op/sec
-delete          1,000,000 ops in 0.105 secs    105.1 ns/op   9,513,842 op/sec
-replace         1,000,000 ops in 0.272 secs    272.1 ns/op   3,674,822 op/sec
-search-item     1,000,000 ops in 0.076 secs     75.9 ns/op  13,169,157 op/sec
-search-1%           1,000 ops in 0.002 secs   2203.0 ns/op     453,926 op/sec
-search-5%           1,000 ops in 0.019 secs  18975.0 ns/op      52,700 op/sec
-search-10%          1,000 ops in 0.056 secs  55982.0 ns/op      17,862 op/sec
+insert          1,000,000 ops in 0.100 secs    100.2 ns/op   9,982,131 op/sec
+search-item     1,000,000 ops in 0.084 secs     84.4 ns/op  11,848,481 op/sec
+search-1%           1,000 ops in 0.002 secs   1986.0 ns/op     503,524 op/sec
+search-5%           1,000 ops in 0.016 secs  15653.0 ns/op      63,885 op/sec
+search-10%          1,000 ops in 0.044 secs  44444.0 ns/op      22,500 op/sec
+delete          1,000,000 ops in 0.084 secs     83.8 ns/op  11,936,592 op/sec
+replace         1,000,000 ops in 0.180 secs    180.4 ns/op   5,544,128 op/sec
+search-item     1,000,000 ops in 0.074 secs     74.0 ns/op  13,512,965 op/sec
+search-1%           1,000 ops in 0.002 secs   2055.0 ns/op     486,618 op/sec
+search-5%           1,000 ops in 0.017 secs  17365.0 ns/op      57,587 op/sec
+search-10%          1,000 ops in 0.048 secs  47728.0 ns/op      20,952 op/sec
 ```
 
 ## Algorithms
@@ -170,8 +170,7 @@ This implementation is a variant of the original paper:
 
 Similar to the original paper. From the root to the leaf, the rects which will incur the least enlargment are chosen. Ties go to rects with the smallest area. 
 
-Added to this implementation: when a rect does not incur any enlargement at all, it's chosen immediately and without further checks on other rects in the same node. Also added is all child rectangles in every node are ordered by their minimum x value. This can dramatically speed up searching for intersecting rectangles on most modern hardware.
-
+Added to this implementation: when a rect does not incur any enlargement at all, it's chosen immediately and without further checks on other rects in the same node. 
 ### Deleting
 
 A target rect is searched for from root to the leaf, and if found it's deleted. When there are no more child rects in a node, that node is immedately removed from the tree.
@@ -194,10 +193,7 @@ Two values, `min-dist` and `max-dist`, are calcuated for each child.
 When the `min-dist` is less than `max-dist` then the child is placed into the `left` rect. 
 When the `max-dist` is less than `min-dist` then the child is placed into the `right` rect. 
 When the `min-dist` is equal to `max-dist` then the child is placed into an `equal` bucket until all of the children are evaluated.
-Each `equal` rect is then one-by-one placed in either `left` or `right`, whichever has less children.
-
-Finally, sort all the rects in the parent node of the split rect by their
-minimum x value.
+Each `equal` rect is then one-by-one placed in either `left` or `right`, whichever has fewer children.
 
 ## License
 
