@@ -2,13 +2,9 @@
 // Use of this source code is governed by an MIT-style
 // license that can be found in the LICENSE file.
 
-#include <stdlib.h>
-#include <stdio.h>
 #include <string.h>
-#include <assert.h>
 #include <math.h>
 #include <stdbool.h>
-#include <stdatomic.h>
 #include "rtree.h"
 
 ////////////////////////////////
@@ -23,6 +19,40 @@
 // used for splits
 #define MINITEMS_PERCENTAGE 10
 #define MINITEMS ((MAXITEMS) * (MINITEMS_PERCENTAGE) / 100 + 1)
+
+#ifdef RTREE_NOATOMICS
+typedef int rc_t;
+static int rc_load(rc_t *ptr, bool relaxed) {
+    (void)relaxed; // nothing to do
+    return *ptr;
+}
+static int rc_fetch_sub(rc_t *ptr, int val) {
+    int rc = *ptr;
+    *ptr -= val;
+    return rc;
+}
+static int rc_fetch_add(rc_t *ptr, int val) {
+    int rc = *ptr;
+    *ptr += val;
+    return rc;
+}
+#else 
+#include <stdatomic.h>
+typedef atomic_int rc_t;
+static int rc_load(rc_t *ptr, bool relaxed) {
+    if (relaxed) {
+        return atomic_load_explicit(ptr, memory_order_relaxed);
+    } else {
+        return atomic_load(ptr);
+    }
+}
+static int rc_fetch_sub(rc_t *ptr, int delta) {
+    return atomic_fetch_sub(ptr, delta);
+}
+static int rc_fetch_add(rc_t *ptr, int delta) {
+    return atomic_fetch_add(ptr, delta);
+}
+#endif
 
 enum kind {
     LEAF = 1,
@@ -39,7 +69,7 @@ struct item {
 };
 
 struct node {
-    atomic_int rc;      // reference counter for copy-on-write
+    rc_t rc;            // reference counter for copy-on-write
     enum kind kind;     // LEAF or BRANCH
     int count;          // number of rects
     struct rect rects[MAXITEMS];
@@ -54,6 +84,7 @@ struct rtree {
     struct node *root;
     size_t count;
     size_t height;
+    bool relaxed;
     void *(*malloc)(size_t);
     void (*free)(void *);
     void *udata;
@@ -93,7 +124,7 @@ static struct node *node_copy(struct rtree *tr, struct node *node) {
     node2->rc = 0;
     if (node2->kind == BRANCH) {
         for (int i = 0; i < node2->count; i++) {
-            atomic_fetch_add(&node2->nodes[i]->rc, 1);
+            rc_fetch_add(&node2->nodes[i]->rc, 1);
         }
     } else {
         if (tr->item_clone) {
@@ -123,7 +154,7 @@ static struct node *node_copy(struct rtree *tr, struct node *node) {
 }
 
 static void node_free(struct rtree *tr, struct node *node) {
-    if (atomic_fetch_sub(&node->rc, 1) > 0) return;
+    if (rc_fetch_sub(&node->rc, 1) > 0) return;
     if (node->kind == BRANCH) {
         for (int i = 0; i < node->count; i++) {
             node_free(tr, node->nodes[i]);
@@ -139,10 +170,10 @@ static void node_free(struct rtree *tr, struct node *node) {
 }
 
 #define cow_node_or(rnode, code) { \
-    if (atomic_load(&(rnode)->rc) > 0) { \
+    if (rc_load(&(rnode)->rc, tr->relaxed) > 0) { \
         struct node *node2 = node_copy(tr, (rnode)); \
         if (!node2) { code; } \
-        atomic_fetch_sub(&(rnode)->rc, 1); \
+        rc_fetch_sub(&(rnode)->rc, 1); \
         (rnode) = node2; \
     } \
 }
@@ -750,9 +781,13 @@ struct rtree *rtree_clone(struct rtree *tr) {
     struct rtree *tr2 = tr->malloc(sizeof(struct rtree));
     if (!tr2) return NULL;
     memcpy(tr2, tr, sizeof(struct rtree));
-    if (tr2->root) atomic_fetch_add(&tr2->root->rc, 1);
+    if (tr2->root) rc_fetch_add(&tr2->root->rc, 1);
     return tr2;
 } 
+
+void rtree_opt_relaxed_atomics(struct rtree *tr) {
+    tr->relaxed = true;
+}
 
 #ifdef TEST_PRIVATE_FUNCTIONS
 #include "tests/priv_funcs.h"

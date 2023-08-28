@@ -1,4 +1,5 @@
 #ifdef TEST_PRIVATE_FUNCTIONS
+#include <stdio.h>
 
 //////////////////
 // checker

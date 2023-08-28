@@ -5,7 +5,6 @@
 #ifndef RTREE_H
 #define RTREE_H
 
-#include <alloca.h>
 #include <stdlib.h>
 #include <stdbool.h>
 
@@ -97,5 +96,8 @@ bool rtree_delete_with_comparator(struct rtree *tr, const double *min,
     const double *max, const void *data,
     int (*compare)(const void *a, const void *b, void *udata),
     void *udata);
+
+
+void rtree_opt_relaxed_atomics(struct rtree *tr);
 
 #endif // RTREE_H
