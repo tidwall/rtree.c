@@ -97,7 +97,9 @@ bool rtree_delete_with_comparator(struct rtree *tr, const double *min,
     int (*compare)(const void *a, const void *b, void *udata),
     void *udata);
 
-
+// rtree_opt_relaxed_atomics activates memory_order_relaxed for all atomic
+// loads. This may increase performance for single-threaded programs.
+// Optionally, define RTREE_NOATOMICS to disbale all atomics.
 void rtree_opt_relaxed_atomics(struct rtree *tr);
 
 #endif // RTREE_H
