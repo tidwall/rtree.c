@@ -129,18 +129,20 @@ The following benchmarks were run on Ubuntu 20.04 (3.4GHz 16-Core AMD Ryzen 9 59
 One million random (evenly distributed) points are inserted, searched, deleted, and replaced.
 
 ```
+clang-17 -O3 -DTEST_PRIVATE_FUNCTIONS -DTEST_DEBUG ../rtree.c bench.c -lm
+seed=1694563565, count=1000000
 -- RANDOM ORDER --
-insert          1,000,000 ops in 0.156 secs    155.6 ns/op   6,426,817 op/sec
-search-item     1,000,000 ops in 0.230 secs    230.2 ns/op   4,344,218 op/sec
-search-1%           1,000 ops in 0.002 secs   1926.0 ns/op     519,210 op/sec
-search-5%           1,000 ops in 0.017 secs  16690.0 ns/op      59,916 op/sec
-search-10%          1,000 ops in 0.051 secs  50679.0 ns/op      19,732 op/sec
-delete          1,000,000 ops in 0.230 secs    230.1 ns/op   4,346,163 op/sec
-replace         1,000,000 ops in 0.355 secs    355.2 ns/op   2,815,014 op/sec
-search-item     1,000,000 ops in 0.241 secs    241.0 ns/op   4,148,585 op/sec
-search-1%           1,000 ops in 0.002 secs   1855.0 ns/op     539,083 op/sec
-search-5%           1,000 ops in 0.017 secs  16928.0 ns/op      59,073 op/sec
-search-10%          1,000 ops in 0.052 secs  52210.0 ns/op      19,153 op/sec
+insert          1,000,000 ops in 0.151 secs    151.3 ns/op   6,610,346 op/sec
+search-item     1,000,000 ops in 0.242 secs    242.4 ns/op   4,125,140 op/sec
+search-1%           1,000 ops in 0.002 secs   1958.0 ns/op     510,725 op/sec
+search-5%           1,000 ops in 0.017 secs  16585.0 ns/op      60,295 op/sec
+search-10%          1,000 ops in 0.051 secs  50791.0 ns/op      19,688 op/sec
+delete          1,000,000 ops in 0.233 secs    232.8 ns/op   4,296,197 op/sec
+replace         1,000,000 ops in 0.302 secs    302.3 ns/op   3,308,355 op/sec
+search-item     1,000,000 ops in 0.241 secs    241.4 ns/op   4,142,862 op/sec
+search-1%           1,000 ops in 0.002 secs   1968.0 ns/op     508,130 op/sec
+search-5%           1,000 ops in 0.017 secs  16680.0 ns/op      59,952 op/sec
+search-10%          1,000 ops in 0.052 secs  52415.0 ns/op      19,078 op/sec
 ```
 
 The following benchmarks are the same as above but the points are ordered on a
@@ -148,17 +150,17 @@ The following benchmarks are the same as above but the points are ordered on a
 
 ```
 -- HILBERT ORDER --
-insert          1,000,000 ops in 0.100 secs    100.2 ns/op   9,982,131 op/sec
-search-item     1,000,000 ops in 0.084 secs     84.4 ns/op  11,848,481 op/sec
-search-1%           1,000 ops in 0.002 secs   1986.0 ns/op     503,524 op/sec
-search-5%           1,000 ops in 0.016 secs  15653.0 ns/op      63,885 op/sec
-search-10%          1,000 ops in 0.044 secs  44444.0 ns/op      22,500 op/sec
-delete          1,000,000 ops in 0.084 secs     83.8 ns/op  11,936,592 op/sec
-replace         1,000,000 ops in 0.180 secs    180.4 ns/op   5,544,128 op/sec
-search-item     1,000,000 ops in 0.074 secs     74.0 ns/op  13,512,965 op/sec
-search-1%           1,000 ops in 0.002 secs   2055.0 ns/op     486,618 op/sec
-search-5%           1,000 ops in 0.017 secs  17365.0 ns/op      57,587 op/sec
-search-10%          1,000 ops in 0.048 secs  47728.0 ns/op      20,952 op/sec
+insert          1,000,000 ops in 0.073 secs     73.1 ns/op  13,686,068 op/sec
+search-item     1,000,000 ops in 0.083 secs     83.1 ns/op  12,039,199 op/sec
+search-1%           1,000 ops in 0.002 secs   2015.0 ns/op     496,277 op/sec
+search-5%           1,000 ops in 0.016 secs  16031.0 ns/op      62,379 op/sec
+search-10%          1,000 ops in 0.046 secs  46241.0 ns/op      21,625 op/sec
+delete          1,000,000 ops in 0.063 secs     62.7 ns/op  15,941,844 op/sec
+replace         1,000,000 ops in 0.083 secs     83.2 ns/op  12,013,599 op/sec
+search-item     1,000,000 ops in 0.084 secs     84.5 ns/op  11,840,344 op/sec
+search-1%           1,000 ops in 0.002 secs   2110.0 ns/op     473,933 op/sec
+search-5%           1,000 ops in 0.016 secs  16055.0 ns/op      62,285 op/sec
+search-10%          1,000 ops in 0.046 secs  46134.0 ns/op      21,675 op/sec
 ```
 
 ## Algorithms
