@@ -20,6 +20,15 @@
 #define MINITEMS_PERCENTAGE 10
 #define MINITEMS ((MAXITEMS) * (MINITEMS_PERCENTAGE) / 100 + 1)
 
+#ifndef RTREE_NOPATHHINT
+#define USE_PATHHINT
+#endif
+
+#ifdef RTREE_MAXITEMS
+#undef MAXITEMS
+#define MAXITEMS RTREE_MAXITEMS
+#endif
+
 #ifdef RTREE_NOATOMICS
 typedef int rc_t;
 static int rc_load(rc_t *ptr, bool relaxed) {
@@ -84,6 +93,9 @@ struct rtree {
     struct node *root;
     size_t count;
     size_t height;
+#ifdef USE_PATHHINT
+    int path_hint[16];
+#endif
     bool relaxed;
     void *(*malloc)(size_t);
     void (*free)(void *);
@@ -206,7 +218,6 @@ static NUMTYPE rect_unioned_area(const struct rect *rect,
 }
 
 static bool rect_contains(const struct rect *rect, const struct rect *other) {
-    // TODO: maybe simd with cmpltpd
     int bits = 0;
     for (int i = 0; i < DIMS; i++) {
         bits |= other->min[i] < rect->min[i];
@@ -216,7 +227,6 @@ static bool rect_contains(const struct rect *rect, const struct rect *other) {
 }
 
 static bool rect_intersects(const struct rect *rect, const struct rect *other) {
-    // TODO: maybe simd with cmpltpd 
     int bits = 0;
     for (int i = 0; i < DIMS; i++) {
         bits |= other->min[i] > rect->max[i];
@@ -403,15 +413,32 @@ static int node_choose_least_enlargement(const struct node *node,
     return j;
 }
 
-static int node_choose(const struct node *node, const struct rect *rect) {
+static int node_choose(struct rtree *tr, const struct node *node, 
+    const struct rect *rect, int depth)
+{
+#ifdef USE_PATHHINT
+    int h = tr->path_hint[depth];
+    if (h < node->count) {
+        if (rect_contains(&node->rects[h], rect)) {
+            return h;
+        }
+    }
+#endif
     // Take a quick look for the first node that contain the rect.
     for (int i = 0; i < node->count; i++) {
         if (rect_contains(&node->rects[i], rect)) {
+#ifdef USE_PATHHINT
+            tr->path_hint[depth] = i;
+#endif
             return i;
         }
     }
     // Fallback to using che "choose least enlargment" algorithm.
-    return node_choose_least_enlargement(node, rect);
+    int i = node_choose_least_enlargement(node, rect);
+#ifdef USE_PATHHINT
+    tr->path_hint[depth] = i;
+#endif
+    return i;
 }
 
 static struct rect node_rect_calc(const struct node *node) {
@@ -424,7 +451,7 @@ static struct rect node_rect_calc(const struct node *node) {
 
 // node_insert returns false if out of memory
 static bool node_insert(struct rtree *tr, struct rect *nr, struct node *node, 
-    struct rect *ir, struct item item, bool *split)
+    struct rect *ir, struct item item, int depth, bool *split)
 {
     if (node->kind == LEAF) {
         if (node->count == MAXITEMS) {
@@ -439,9 +466,11 @@ static bool node_insert(struct rtree *tr, struct rect *nr, struct node *node,
         return true;
     }
     // Choose a subtree for inserting the rectangle.
-    int i = node_choose(node, ir);
+    int i = node_choose(tr, node, ir, depth);
     cow_node_or(node->nodes[i], return false);
-    if (!node_insert(tr, &node->rects[i], node->nodes[i], ir, item, split)) {
+    if (!node_insert(tr, &node->rects[i], node->nodes[i], ir, item, depth+1, 
+        split))
+    {
         return false;
     }
     if (!*split) {
@@ -462,7 +491,7 @@ static bool node_insert(struct rtree *tr, struct rect *nr, struct node *node,
     node->rects[node->count] = node_rect_calc(right);
     node->nodes[node->count] = right;
     node->count++;
-    return node_insert(tr, nr, node, ir, item, split);
+    return node_insert(tr, nr, node, ir, item, depth, split);
 }
 
 struct rtree *rtree_new_with_allocator(void *(*_malloc)(size_t), 
@@ -520,7 +549,7 @@ bool rtree_insert(struct rtree *tr, const NUMTYPE *min,
         }
         bool split = false;
         cow_node_or(tr->root, break);
-        if (!node_insert(tr, &tr->rect, tr->root, &rect, item, &split)) {
+        if (!node_insert(tr, &tr->rect, tr->root, &rect, item, 0, &split)) {
             break;
         }
         if (!split) {
@@ -640,7 +669,7 @@ size_t rtree_count(const struct rtree *tr) {
 }
 
 static bool node_delete(struct rtree *tr, struct rect *nr, struct node *node, 
-    struct rect *ir, struct item item, bool *removed, bool *shrunk,
+    struct rect *ir, struct item item, int depth, bool *removed, bool *shrunk,
     int (*compare)(const DATATYPE a, const DATATYPE b, void *udata),
     void *udata)
 {
@@ -677,13 +706,31 @@ static bool node_delete(struct rtree *tr, struct rect *nr, struct node *node,
         }
         return true;
     }
-    for (int i = 0; i < node->count; i++) {
-        if (!rect_contains(&node->rects[i], ir)) {
+    int h = 0;
+#ifdef USE_PATHHINT
+    h = tr->path_hint[depth];
+    if (h < node->count) {
+        if (rect_contains(&node->rects[h], ir)) {
+            cow_node_or(node->nodes[h], return false);
+            if (!node_delete(tr, &node->rects[h], node->nodes[h], ir, item, 
+                depth+1,removed, shrunk, compare, udata))
+            {
+                return false;
+            }
+            if (*removed) {
+                goto removed;
+            }
+        }
+    }
+    h = 0;
+#endif
+    for (; h < node->count; h++) {
+        if (!rect_contains(&node->rects[h], ir)) {
             continue;
         }
-        struct rect crect = node->rects[i];
-        cow_node_or(node->nodes[i], return false);
-        if (!node_delete(tr, &node->rects[i], node->nodes[i], ir, item, 
+        struct rect crect = node->rects[h];
+        cow_node_or(node->nodes[h], return false);
+        if (!node_delete(tr, &node->rects[h], node->nodes[h], ir, item, depth+1,
             removed, shrunk, compare, udata))
         {
             return false;
@@ -691,18 +738,22 @@ static bool node_delete(struct rtree *tr, struct rect *nr, struct node *node,
         if (!*removed) {
             continue;
         }
-        if (node->nodes[i]->count == 0) {
+    removed:
+        if (node->nodes[h]->count == 0) {
             // underflow
-            node_free(tr, node->nodes[i]);
-            node->rects[i] = node->rects[node->count-1];
-            node->nodes[i] = node->nodes[node->count-1];
+            node_free(tr, node->nodes[h]);
+            node->rects[h] = node->rects[node->count-1];
+            node->nodes[h] = node->nodes[node->count-1];
             node->count--;
             *nr = node_rect_calc(node);
             *shrunk = true;
             return true;
         }
+#ifdef USE_PATHHINT
+        tr->path_hint[depth] = h;
+#endif
         if (*shrunk) {
-            *shrunk = !rect_equals(&node->rects[i], &crect);
+            *shrunk = !rect_equals(&node->rects[h], &crect);
             if (*shrunk) {
                 *nr = node_rect_calc(node);
             }
@@ -733,7 +784,7 @@ static bool rtree_delete0(struct rtree *tr, const NUMTYPE *min,
     bool removed = false;
     bool shrunk = false;
     cow_node_or(tr->root, return false);
-    if (!node_delete(tr, &tr->rect, tr->root, &rect, item, &removed, &shrunk, 
+    if (!node_delete(tr, &tr->rect, tr->root, &rect, item, 0, &removed, &shrunk, 
         compare, udata))
     {
         return false;
