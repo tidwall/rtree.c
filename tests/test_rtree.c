@@ -230,6 +230,10 @@ void test_rtree_ops(void) {
             while (!rtree_delete_with_comparator(tr, min, max, data,
                 comparator, &x)) {}
         } else {
+            // This first delete will not delete anything because the pointer
+            // is invalid.
+            while (!rtree_delete(tr, min, max, data+1)){}
+            // This one will delete
             while (!rtree_delete(tr, min, max, data)){}
         }
         assert(!find_one(tr, min, max, data, NULL, NULL));
@@ -250,6 +254,8 @@ void test_rtree_ops(void) {
 void test_rtree_various(void) {
     struct rtree *tr = rtree_new();
     assert(tr);
+    rtree_opt_relaxed_atomics(tr);
+    rtree_insert(tr, (double[2]){1, 1}, (double[2]){2, 2}, (void*)1);
     rtree_free(tr);
 }
 

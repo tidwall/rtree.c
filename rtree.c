@@ -301,7 +301,7 @@ struct rect4 {
     NUMTYPE all[DIMS*2];
 };
 
-static void node_qsort(struct node *node, int s, int e, int index, bool rev) { 
+static void node_qsort(struct node *node, int s, int e, int index) { 
     int nrects = e - s;
     if (nrects < 2) {
         return;
@@ -311,30 +311,21 @@ static void node_qsort(struct node *node, int s, int e, int index, bool rev) {
     int pivot = nrects / 2;
     node_swap(node, s+pivot, s+right);
     struct rect4 *rects = (struct rect4 *)&node->rects[s];
-    if (!rev) {
-        for (int i = 0; i < nrects; i++) {
-            if (rects[i].all[index] < rects[right].all[index]) {
-                node_swap(node, s+i, s+left);
-                left++;
-            }
-        }
-    } else {
-        for (int i = 0; i < nrects; i++) {
-            if (rects[right].all[index] < rects[i].all[index]) {
-                node_swap(node, s+i, s+left);
-                left++;
-            }
+    for (int i = 0; i < nrects; i++) {
+        if (rects[right].all[index] < rects[i].all[index]) {
+            node_swap(node, s+i, s+left);
+            left++;
         }
     }
     node_swap(node, s+left, s+right);
-    node_qsort(node, s, s+left, index, rev);
-    node_qsort(node, s+left+1, e, index, rev);
+    node_qsort(node, s, s+left, index);
+    node_qsort(node, s+left+1, e, index);
 }
 
 // sort the node rectangles by the axis. used during splits
-static void node_sort_by_axis(struct node *node, int axis, bool rev, bool max) {
+static void node_sort_by_axis(struct node *node, int axis, bool max) {
     int by_index = max ? DIMS+axis : axis;
-    node_qsort(node, 0, node->count, by_index, rev);
+    node_qsort(node, 0, node->count, by_index);
 }
 
 static void node_move_rect_at_index_into(struct node *from, int index, 
@@ -374,16 +365,20 @@ static bool node_split_largest_axis_edge_snap(struct rtree *tr,
     // MINITEMS by moving datas into underflowed nodes.
     if (node->count < MINITEMS) {
         // reverse sort by min axis
-        node_sort_by_axis(right, axis, true, false);
+        node_sort_by_axis(right, axis, false);
         do { 
             node_move_rect_at_index_into(right, right->count-1, node);
         } while (node->count < MINITEMS);
     } else if (right->count < MINITEMS) {
         // reverse sort by max axis
-        node_sort_by_axis(node, axis, true, true);
+        node_sort_by_axis(node, axis, true);
         do { 
             node_move_rect_at_index_into(node, node->count-1, right);
         } while (right->count < MINITEMS);
+    }
+    if (node->kind == BRANCH) {
+        node_sort_by_axis(node, 0, false);
+        node_sort_by_axis(right, 0, false);
     }
     *right_out = right;
     return true;
