@@ -185,7 +185,7 @@ static void node_free(struct rtree *tr, struct node *node) {
     if (rc_load(&(rnode)->rc, tr->relaxed) > 0) { \
         struct node *node2 = node_copy(tr, (rnode)); \
         if (!node2) { code; } \
-        rc_fetch_sub(&(rnode)->rc, 1); \
+        node_free(tr, rnode); \
         (rnode) = node2; \
     } \
 }
