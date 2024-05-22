@@ -125,6 +125,7 @@ double cities[] = {27.0500,57.4167,13.2000,47.3500,103.4167,4.2500,-71.0495,42.3
 -57.8738,-21.0415,-90.8075,14.4803,100.2000,6.4333,18.0269,45.1903};
 
 void test_rtree_predef_svg(void) {
+    #if RTREE_DIMS == 2
     struct rtree *tr;
     while (!(tr = rtree_new_with_allocator(xmalloc, xfree))){}
     int N = sizeof(predef)/(sizeof(double)*2);
@@ -134,9 +135,11 @@ void test_rtree_predef_svg(void) {
     }
     rtree_write_svg(tr, "predefined.svg");
     rtree_free(tr);
+    #endif
 }
 
 void test_rtree_cities_svg(void) {
+    #if RTREE_DIMS == 2
     struct rtree *tr;
     while (!(tr = rtree_new_with_allocator(xmalloc, xfree))){}
     int N = sizeof(cities)/(sizeof(double)*2);
@@ -146,6 +149,7 @@ void test_rtree_cities_svg(void) {
     }
     rtree_write_svg(tr, "cities.svg");
     rtree_free(tr);
+    #endif
 }
 
 
@@ -158,7 +162,7 @@ struct iter_scan_all_ctx {
     size_t count;
 };
 
-bool iter_scan_all(const double *min, const double *max, const void *data,
+bool iter_scan_all(const RTREE_NUMTYPE *min, const RTREE_NUMTYPE *max, const void *data,
     void *udata)
 {
     (void)min; (void)max; (void)data;
@@ -171,7 +175,7 @@ struct iter_two_ctx {
     size_t count;
 };
 
-bool iter_two(const double *min, const double *max, const void *data,
+bool iter_two(const RTREE_NUMTYPE *min, const RTREE_NUMTYPE *max, const void *data,
     void *udata)
 {
     (void)min; (void)max; (void)data;
@@ -182,17 +186,17 @@ bool iter_two(const double *min, const double *max, const void *data,
 
 
 void test_rtree_ops(void) {
-    int N = 100000;
-    double *coords;
-    while (!(coords = xmalloc(sizeof(double)*N*4))) {}
+    int N = 10000;
+    RTREE_NUMTYPE *coords;
+    while (!(coords = xmalloc(sizeof(RTREE_NUMTYPE)*RTREE_DIMS*2*N))) {}
     for (int i = 0; i < N; i++) {
-        fill_rand_rect(&coords[i*4]);
+        fill_rand_rect(&coords[i*RTREE_DIMS*2]);
     }
     struct rtree *tr;
     while (!(tr = rtree_new_with_allocator(xmalloc, xfree))){}
     for (int i = 0; i < N; i++) {
-        double *min = &coords[i*4+0];
-        double *max = &coords[i*4+2];
+        RTREE_NUMTYPE *min = &coords[i*RTREE_DIMS*2+0];
+        RTREE_NUMTYPE *max = &coords[i*RTREE_DIMS*2+RTREE_DIMS];
         void *data = (void *)(uintptr_t)i;
         while (!rtree_insert(tr, min, max, data)){}
         assert(find_one(tr, min, max, data, NULL, NULL));
@@ -215,13 +219,17 @@ void test_rtree_ops(void) {
 
     // find two and stop
     struct iter_two_ctx ctx = { 0 };
-    rtree_search(tr, (double[2]){ -180.0, -90.0 }, (double[2]){ 180.0, 90.0 }, 
+    if(is_float_point(RTREE_NUMTYPE)){
+        #if RTREE_DIMS == 2
+        rtree_search(tr, (RTREE_NUMTYPE[RTREE_DIMS]){ -180.0, -90.0 }, (RTREE_NUMTYPE[RTREE_DIMS]){ 180.0, 90.0 }, 
         iter_two, &ctx);
-    assert(ctx.count == 2);
+        assert(ctx.count == 2);
+        #endif
+    }
 
     for (int i = 0; i < N; i++) {
-        double *min = &coords[i*4+0];
-        double *max = &coords[i*4+2];
+        RTREE_NUMTYPE *min = &coords[i*RTREE_DIMS*2+0];
+        RTREE_NUMTYPE *max = &coords[i*RTREE_DIMS*2+RTREE_DIMS];
         void *data = (void *)(uintptr_t)i;
         assert(rtree_count(tr) == (size_t)(N-i));
         assert(find_one(tr, min, max, data, NULL, NULL));
@@ -255,7 +263,7 @@ void test_rtree_various(void) {
     struct rtree *tr = rtree_new();
     assert(tr);
     rtree_opt_relaxed_atomics(tr);
-    rtree_insert(tr, (double[2]){1, 1}, (double[2]){2, 2}, (void*)1);
+    rtree_insert(tr, (RTREE_NUMTYPE[RTREE_DIMS]){1}, (RTREE_NUMTYPE[RTREE_DIMS]){2}, (void*)1);
     rtree_free(tr);
 }
 
@@ -263,8 +271,12 @@ void test_rtree_various(void) {
 int main(int argc, char **argv) {
     seedrand();
     do_chaos_test(test_rtree_ops);
-    do_chaos_test(test_rtree_cities_svg);
-    do_chaos_test(test_rtree_predef_svg);
+    if(is_float_point(RTREE_NUMTYPE)){
+        #if RTREE_DIMS == 2
+        do_chaos_test(test_rtree_cities_svg);
+        do_chaos_test(test_rtree_predef_svg);
+        #endif
+    }
     do_test(test_rtree_various);
 
     return 0;
