@@ -83,6 +83,12 @@ bool rtree_insert(struct rtree *tr, const RTREE_NUMTYPE *min, const RTREE_NUMTYP
 // Returning false from the iter will stop the search.
 void rtree_search(const struct rtree *tr, const RTREE_NUMTYPE min[], const RTREE_NUMTYPE max[], rtree_iter *iter, void *udata);
 
+// rtree_radius_search searches the rtree and iterates over each item that intersect
+// the provided circle or sphere defined by point and radius
+//
+// Returning false from the iter will stop the search.
+void rtree_raduis_search(const struct rtree *tr, const RTREE_NUMTYPE point[], double raduis, rtree_iter *iter, void *udata);
+
 // rtree_scan iterates over every item in the rtree.
 //
 // Returning false from the iter will stop the scan.
