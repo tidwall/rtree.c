@@ -497,7 +497,10 @@ struct rtree *rtree_new(void) {
     return rtree_new_with_allocator(NULL, NULL);
 }
 
-void rtree_set_item_callbacks(struct rtree *tr, rtree_clone_cb *clone, rtree_free_cb *free) {
+void rtree_set_item_callbacks(struct rtree *tr,
+    bool (*clone)(const RTREE_DATATYPE item, RTREE_DATATYPE *into, void *udata),
+    void (*free)(const RTREE_DATATYPE item, void *udata))
+{
     tr->item_clone = clone;
     tr->item_free = free;
 }
@@ -571,7 +574,11 @@ void rtree_free(struct rtree *tr) {
     tr->free(tr);
 }
 
-static bool node_search(struct node *node, struct rect *rect, rtree_iter *iter, void *udata) {
+static bool node_search(struct node *node, struct rect *rect,
+    bool (*iter)(const RTREE_NUMTYPE *min, const RTREE_NUMTYPE *max, const RTREE_DATATYPE data, 
+        void *udata), 
+    void *udata) 
+{
     if (node->kind == LEAF) {
         for (int i = 0; i < node->count; i++) {
             if (rect_intersects(&node->rects[i], rect)) {
@@ -594,8 +601,11 @@ static bool node_search(struct node *node, struct rect *rect, rtree_iter *iter, 
     return true;
 }
 
-void rtree_search(const struct rtree *tr, const RTREE_NUMTYPE min[], const RTREE_NUMTYPE max[], 
-    rtree_iter *iter, void *udata)
+void rtree_search(const struct rtree *tr, const RTREE_NUMTYPE min[], 
+    const RTREE_NUMTYPE max[],
+    bool (*iter)(const RTREE_NUMTYPE min[], const RTREE_NUMTYPE max[], const RTREE_DATATYPE data, 
+        void *udata), 
+    void *udata)
 {
     // copy input rect
     struct rect rect;
@@ -607,57 +617,10 @@ void rtree_search(const struct rtree *tr, const RTREE_NUMTYPE min[], const RTREE
     }
 }
 
-double distance(const RTREE_NUMTYPE *p1, const RTREE_NUMTYPE *p2) {
-    double sum = 0;
-    for (int i = 0; i < RTREE_DIMS; i++) {
-        double diff = p1[i] - p2[i];        
-        sum += diff * diff;
-    }
-    return sqrt(sum);
-}
-
-struct radius_search_data {
-    rtree_iter *original_iter;
-    const RTREE_NUMTYPE *center_point;
-    void *original_udata;
-    double radius;
-};
-
-bool raduis_iter(const RTREE_NUMTYPE min[], const RTREE_NUMTYPE max[], const RTREE_DATATYPE data, void *udata){
-    struct radius_search_data *rsd = (struct radius_search_data*)udata;
-    double maxd = distance(rsd->center_point, max);
-    double mind = distance(rsd->center_point, min);
-    if ((maxd < rsd->radius) || (mind < rsd->radius)) {
-        return rsd->original_iter(min,max,data,rsd->original_udata);
-    }
-
-    return true;
-}
-
-void rtree_raduis_search(const struct rtree *tr, const RTREE_NUMTYPE point[], double raduis, 
-    rtree_iter *iter, void *udata)
-{
-    // copy input rect
-    struct rect rect;
-    memcpy(&rect.min[0], point, sizeof(RTREE_NUMTYPE)*RTREE_DIMS);
-    memcpy(&rect.max[0], point, sizeof(RTREE_NUMTYPE)*RTREE_DIMS);
-    for(int d = 0; d < RTREE_DIMS; d++) {
-        rect.min[d] -= raduis;
-        rect.max[d] += raduis;
-    }
-
-    struct radius_search_data rsd;
-    rsd.original_iter = iter;
-    rsd.radius = raduis;
-    rsd.center_point = point;
-    rsd.original_udata = udata;
-
-    if (tr->root) {
-        node_search(tr->root, &rect, raduis_iter, &rsd);
-    }
-}
-
-static bool node_scan(struct node *node, rtree_iter *iter, void *udata) 
+static bool node_scan(struct node *node,
+    bool (*iter)(const RTREE_NUMTYPE *min, const RTREE_NUMTYPE *max, const RTREE_DATATYPE data, 
+        void *udata), 
+    void *udata) 
 {
     if (node->kind == LEAF) {
         for (int i = 0; i < node->count; i++) {
@@ -677,7 +640,11 @@ static bool node_scan(struct node *node, rtree_iter *iter, void *udata)
     return true;
 }
 
-void rtree_scan(const struct rtree *tr, rtree_iter *iter, void *udata) {
+void rtree_scan(const struct rtree *tr, 
+    bool (*iter)(const RTREE_NUMTYPE *min, const RTREE_NUMTYPE *max, const RTREE_DATATYPE data, 
+        void *udata), 
+    void *udata)
+{
     if (tr->root) {
         node_scan(tr->root, iter, udata);
     }
@@ -689,7 +656,7 @@ size_t rtree_count(const struct rtree *tr) {
 
 static bool node_delete(struct rtree *tr, struct rect *nr, struct node *node, 
     struct rect *ir, struct item item, int depth, bool *removed, bool *shrunk,
-    rtree_compare *compare,
+    int (*compare)(const RTREE_DATATYPE a, const RTREE_DATATYPE b, void *udata),
     void *udata)
 {
     *removed = false;
@@ -785,7 +752,7 @@ static bool node_delete(struct rtree *tr, struct rect *nr, struct node *node,
 // returns false if out of memory
 static bool rtree_delete0(struct rtree *tr, const RTREE_NUMTYPE *min, 
     const RTREE_NUMTYPE *max, const RTREE_DATATYPE data,
-    rtree_compare *compare,
+    int (*compare)(const RTREE_DATATYPE a, const RTREE_DATATYPE b, void *udata),
     void *udata)
 {
     // copy input rect
