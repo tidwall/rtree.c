@@ -607,6 +607,56 @@ void rtree_search(const struct rtree *tr, const RTREE_NUMTYPE min[], const RTREE
     }
 }
 
+double distance(const RTREE_NUMTYPE *p1, const RTREE_NUMTYPE *p2) {
+    double sum = 0;
+    for (int i = 0; i < RTREE_DIMS; i++) {
+        double diff = p1[i] - p2[i];        
+        sum += diff * diff;
+    }
+    return sqrt(sum);
+}
+
+struct radius_search_data {
+    rtree_iter *original_iter;
+    const RTREE_NUMTYPE *center_point;
+    void *original_udata;
+    double radius;
+};
+
+bool raduis_iter(const RTREE_NUMTYPE min[], const RTREE_NUMTYPE max[], const RTREE_DATATYPE data, void *udata){
+    struct radius_search_data *rsd = (struct radius_search_data*)udata;
+    double maxd = distance(rsd->center_point, max);
+    double mind = distance(rsd->center_point, min);
+    if ((maxd < rsd->radius) || (mind < rsd->radius)) {
+        return rsd->original_iter(min,max,data,rsd->original_udata);
+    }
+
+    return true;
+}
+
+void rtree_raduis_search(const struct rtree *tr, const RTREE_NUMTYPE point[], double raduis, 
+    rtree_iter *iter, void *udata)
+{
+    // copy input rect
+    struct rect rect;
+    memcpy(&rect.min[0], point, sizeof(RTREE_NUMTYPE)*RTREE_DIMS);
+    memcpy(&rect.max[0], point, sizeof(RTREE_NUMTYPE)*RTREE_DIMS);
+    for(int d = 0; d < RTREE_DIMS; d++) {
+        rect.min[d] -= raduis;
+        rect.max[d] += raduis;
+    }
+
+    struct radius_search_data rsd;
+    rsd.original_iter = iter;
+    rsd.radius = raduis;
+    rsd.center_point = point;
+    rsd.original_udata = udata;
+
+    if (tr->root) {
+        node_search(tr->root, &rect, raduis_iter, &rsd);
+    }
+}
+
 static bool node_scan(struct node *node, rtree_iter *iter, void *udata) 
 {
     if (node->kind == LEAF) {
