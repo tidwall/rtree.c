@@ -24,6 +24,10 @@
 #define RTREE_MAXITEMS 64
 #endif
 
+typedef bool (rtree_iter)(const RTREE_NUMTYPE min[], const RTREE_NUMTYPE max[], const RTREE_DATATYPE data, void *udata);
+typedef bool (rtree_clone_cb)(const void *item, void **into, void *udata);
+typedef void (rtree_free_cb)(const void *item, void *udata);
+typedef int  (rtree_compare)(const RTREE_DATATYPE a, const RTREE_DATATYPE b, void *udata);
 
 // rtree_new returns a new rtree
 //
@@ -52,9 +56,7 @@ struct rtree *rtree_clone(struct rtree *tr);
 //
 // The clone function should return true if the clone succeeded or false if the
 // system is out of memory.
-void rtree_set_item_callbacks(struct rtree *tr,
-    bool (*clone)(const void *item, void **into, void *udata), 
-    void (*free)(const void *item, void *udata));
+void rtree_set_item_callbacks(struct rtree *tr, rtree_clone_cb *clone, rtree_free_cb *free);
 
 // rtree_set_udata sets the user-defined data. 
 //
@@ -79,15 +81,12 @@ bool rtree_insert(struct rtree *tr, const RTREE_NUMTYPE *min, const RTREE_NUMTYP
 // the provided rectangle.
 //
 // Returning false from the iter will stop the search.
-void rtree_search(const struct rtree *tr, const RTREE_NUMTYPE min[], const RTREE_NUMTYPE max[],
-    bool (*iter)(const RTREE_NUMTYPE min[], const RTREE_NUMTYPE max[], const RTREE_DATATYPE data, void *udata), void *udata);
+void rtree_search(const struct rtree *tr, const RTREE_NUMTYPE min[], const RTREE_NUMTYPE max[], rtree_iter *iter, void *udata);
 
 // rtree_scan iterates over every item in the rtree.
 //
 // Returning false from the iter will stop the scan.
-void rtree_scan(const struct rtree *tr,
-    bool (*iter)(const RTREE_NUMTYPE *min, const RTREE_NUMTYPE *max, const RTREE_DATATYPE data, void *udata), 
-    void *udata);
+void rtree_scan(const struct rtree *tr, rtree_iter *iter, void *udata);
 
 // rtree_count returns the number of items in the rtree.
 size_t rtree_count(const struct rtree *tr);
@@ -109,7 +108,7 @@ bool rtree_delete(struct rtree *tr, const RTREE_NUMTYPE *min, const RTREE_NUMTYP
 // Returns false if the system is out of memory.
 bool rtree_delete_with_comparator(struct rtree *tr, const RTREE_NUMTYPE *min, 
     const RTREE_NUMTYPE *max, const RTREE_DATATYPE data,
-    int (*compare)(const RTREE_DATATYPE a, const RTREE_DATATYPE b, void *udata),
+    rtree_compare *compare,
     void *udata);
 
 // rtree_opt_relaxed_atomics activates memory_order_relaxed for all atomic
