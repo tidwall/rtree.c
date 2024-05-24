@@ -6,8 +6,8 @@
 // }
 
 struct pair {
-    double min[2];
-    double max[2];
+    RTREE_NUMTYPE min[RTREE_DIMS];
+    RTREE_NUMTYPE max[RTREE_DIMS];
     int key;
     int val;
 };
@@ -371,7 +371,7 @@ struct iter_clone_access_all {
     size_t count;
 };
 
-bool iter_clone_access_all(const double min[], const double max[], 
+bool iter_clone_access_all(const RTREE_NUMTYPE min[], const RTREE_NUMTYPE max[], 
     const void *data, void *udata)
 {
     (void)min; (void)max; (void)data;
