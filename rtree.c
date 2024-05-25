@@ -15,11 +15,6 @@
 #define USE_PATHHINT
 #endif
 
-#ifdef RTREE_RTREE_MAXITEMS
-#undef RTREE_MAXITEMS
-#define RTREE_MAXITEMS RTREE_RTREE_MAXITEMS
-#endif
-
 #ifdef RTREE_NOATOMICS
 typedef int rc_t;
 static int rc_load(rc_t *ptr, bool relaxed) {
