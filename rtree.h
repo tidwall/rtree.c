@@ -5,6 +5,10 @@
 #ifndef RTREE_H
 #define RTREE_H
 
+#ifdef __cplusplus
+extern "C" {
+#endif
+
 #include <stdlib.h>
 #include <stdbool.h>
 
@@ -116,5 +120,9 @@ bool rtree_delete_with_comparator(struct rtree *tr, const RTREE_NUMTYPE *min,
 // loads. This may increase performance for single-threaded programs.
 // Optionally, define RTREE_NOATOMICS to disbale all atomics.
 void rtree_opt_relaxed_atomics(struct rtree *tr);
+
+#ifdef __cplusplus
+}
+#endif
 
 #endif // RTREE_H
