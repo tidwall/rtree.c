@@ -1,8 +1,5 @@
+#define TEST_PRIVATE_FUNCTIONS
 #include "tests.h"
-#include "../rtree.h"
-
-
-
 
 #define bench(name, N, code) {{ \
     if (strlen(name) > 0) { \
@@ -12,7 +9,7 @@
     size_t tallocs = (size_t)total_allocs; \
     uint64_t bytes = 0; \
     clock_t begin = clock(); \
-    for (int i = 0; i < N; i++) { \
+    { \
         (code); \
     } \
     clock_t end = clock(); \
@@ -174,22 +171,22 @@ uint32_t hilbert(double lat, double lon) {
 
 
 
-static bool search_iter(const double *min, const double *max, const void *item, void *udata) {
+static bool search_iter(const RTREE_NUMTYPE *min, const RTREE_NUMTYPE *max, const void *item, void *udata) {
     (*(int*)udata)++;
     return true;
 }
 
 struct search_iter_one_context {
-    double *point;
+    RTREE_NUMTYPE *point;
     void *data;
     int count;
 };
 
-static bool search_iter_one(const double *min, const double *max, const void *data, void *udata) {
+static bool search_iter_one(const RTREE_NUMTYPE *min, const RTREE_NUMTYPE *max, const void *data, void *udata) {
     struct search_iter_one_context *ctx = (struct search_iter_one_context *)udata;
     if (data == ctx->data) {
-        assert(memcmp(min, ctx->point, sizeof(double)*2) == 0);
-        assert(memcmp(max, ctx->point, sizeof(double)*2) == 0);
+        assert(memcmp(min, ctx->point, sizeof(RTREE_NUMTYPE)*RTREE_DIMS) == 0);
+        assert(memcmp(max, ctx->point, sizeof(RTREE_NUMTYPE)*RTREE_DIMS) == 0);
         ctx->count++;
         return false;
     }
@@ -197,18 +194,24 @@ static bool search_iter_one(const double *min, const double *max, const void *da
 }
 
 int point_compare(const void *a, const void *b) {
-    const double *p1 = a;
-    const double *p2 = b;
-    uint32_t h1 = hilbert(p1[1],p1[0]);
-    uint32_t h2 = hilbert(p2[1],p2[0]);
+    DISABLE_WARNING_PUSH
+    DISABLE_WARNING(-Wvoid-pointer-to-int-cast)
+    const RTREE_NUMTYPE *p1 = (const RTREE_NUMTYPE*)a;
+    const RTREE_NUMTYPE *p2 = (const RTREE_NUMTYPE*)b;
+    DISABLE_WARNING_POP
+    
+    if (is_float_point(RTREE_NUMTYPE)) {
+        uint32_t h1 = hilbert(p1[1],p1[0]);
+        uint32_t h2 = hilbert(p2[1],p2[0]);
 
-    if (h1 < h2) {
-        return -1;
+        if (h1 < h2) {
+            return -1;
+        }
+        if (h1 > h2) {
+            return 1;
+        }
+        return 0;
     }
-    if (h1 > h2) {
-        return 1;
-    }
-    return 0;
 
     if (p1[0] < p2[0]) {
         return -1;
@@ -224,19 +227,99 @@ void shuffle_points(double *points, int N) {
     shuffle(points, N, sizeof(double)*2);
 }
 
-double *make_random_points(int N) {
-    double *points = (double *)xmalloc(N*2*sizeof(double));
-    for (int i = 0; i < N; i++) {
-        points[i*2+0] = rand_double() * 360.0 - 180.0;;
-        points[i*2+1] = rand_double() * 180.0 - 90.0;;
+RTREE_NUMTYPE *make_random_points(int N) {
+    RTREE_NUMTYPE *points = (RTREE_NUMTYPE *)xmalloc(N*RTREE_DIMS*sizeof(RTREE_NUMTYPE));
+    if(is_float_point(RTREE_NUMTYPE)) {
+        for (int i = 0; i < N; i++) {
+            #if RTREE_DIMS == 2
+                points[i*2+0] = rand_double() * 360.0 - 180.0;;
+                points[i*2+1] = rand_double() * 180.0 - 90.0;;
+            #else
+                for (int d = 0; d < RTREE_DIMS; d++){
+                    points[i*RTREE_DIMS+d] = rand_double();
+                }
+            #endif
+        }
+    }else{
+        for (int i = 0; i < N; i++) {
+            for (int d = 0; d < RTREE_DIMS; d++){
+                points[i*RTREE_DIMS+d] = rand();
+            }
+        }
     }
     return points;
 }
 
-
-void sort_points(double *points, int N) {
-    qsort(points, N, sizeof(double)*2, point_compare);
+void sort_points(RTREE_NUMTYPE *points, int N) {
+    qsort(points, N, sizeof(RTREE_NUMTYPE)*RTREE_DIMS, point_compare);
 } 
+
+void insert(struct rtree *tr,RTREE_NUMTYPE *points, int N){
+    for (int i = 0; i < N; i++){
+        RTREE_NUMTYPE *point = &points[i*RTREE_DIMS];
+        rtree_insert(tr, point, point, (void *)(uintptr_t)(i));
+        assert(rtree_count(tr) == i+1);
+    }
+}
+
+void search_item(struct rtree *tr,RTREE_NUMTYPE *points, int N){
+    for (int i = 0; i < N; i++){
+        RTREE_NUMTYPE *point = &points[i*RTREE_DIMS];
+        struct search_iter_one_context ctx = { 0 };
+        ctx.point = point;
+        ctx.data = (void *)(uintptr_t)(i);
+        rtree_search(tr, point, point, search_iter_one, &ctx);
+        assert(ctx.count == 1);
+    }
+}
+
+void search(struct rtree *tr,RTREE_NUMTYPE *points, int N, double p){
+    for (int i = 0; i < N; i++){
+        RTREE_NUMTYPE min[RTREE_DIMS];
+        RTREE_NUMTYPE max[RTREE_DIMS];
+        if(is_float_point(RTREE_NUMTYPE)){
+            #if RTREE_DIMS == 2
+            min[0] = rand_double() * 360.0 - 180.0;
+            min[1] = rand_double() * 180.0 - 90.0;
+            max[0] = min[0] + 360.0*p;
+            max[1] = min[1] + 180.0*p;
+            #else
+            for (int d = 0; d < RTREE_DIMS; d++){
+                min[d] = rand_double();
+                max[d] = min[d] + 360.0*p;
+            }
+            #endif
+        }else{
+            for (int d = 0; d < RTREE_DIMS; d++){
+                min[d] = rand();
+                max[d] = min[d] + 360*p;
+            }
+        }
+        int res = 0;
+        rtree_search(tr, min, max, search_iter, &res);
+        // printf("%d\n", res);
+    }
+}
+
+void delete(struct rtree *tr,RTREE_NUMTYPE *points, int N){
+    for (int i = 0; i < N; i++){
+        RTREE_NUMTYPE *point = &points[i*RTREE_DIMS];
+        rtree_delete(tr, point, point, (void*)(uintptr_t)(i));
+        assert(rtree_count(tr) == N-i-1);
+    }
+}
+
+void replace(struct rtree *tr,RTREE_NUMTYPE *points, RTREE_NUMTYPE *points2, int N){
+    for (int i = 0; i < N; i++){
+        assert(rtree_count(tr) == N);
+        RTREE_NUMTYPE *point = &points[i*RTREE_DIMS];
+        rtree_delete(tr, point, point, (void*)(uintptr_t)(i));
+        assert(rtree_count(tr) == N-1);
+        RTREE_NUMTYPE *point2 = &points2[i*RTREE_DIMS];
+        rtree_insert(tr, point2, point2, (void*)(uintptr_t)(i));
+        assert(rtree_count(tr) == N);
+    }
+}
 
 void test_rand_bench(bool hilbert_ordered, int N) {
     if (hilbert_ordered) {
@@ -244,148 +327,57 @@ void test_rand_bench(bool hilbert_ordered, int N) {
     } else {
         printf("-- RANDOM ORDER --\n");
     }
-    double *points = make_random_points(N);
+    RTREE_NUMTYPE *points = make_random_points(N);
     if (hilbert_ordered) {
         sort_points(points, N);
     }
 
+
     struct rtree *tr = rtree_new_with_allocator(xmalloc, xfree);
-    bench("insert", N, {
-        double *point = &points[i*2];
-        rtree_insert(tr, point, point, (void *)(uintptr_t)(i));
-        assert(rtree_count(tr) == i+1);
-    });
+    bench("insert", N, insert(tr,points,N));
 
     rtree_check(tr);
-
 
     // sort_points(points, N);
-    bench("search-item", N, {
-        double *point = &points[i*2];
-        struct search_iter_one_context ctx = { 0 };
-        ctx.point = point;
-        ctx.data = (void *)(uintptr_t)(i);
-        rtree_search(tr, point, point, search_iter_one, &ctx);
-        assert(ctx.count == 1);
-    });
+    bench("search-item", N, search_item(tr,points,N));
 
+    bench("search-1%", N, search(tr,points,N,0.01));
+    bench("search-5%", N, search(tr,points,N,0.05));
+    bench("search-10%", N, search(tr,points,N,0.10));
+    bench("delete", N, delete(tr,points,N));
 
-    bench("search-1%", 1000, {
-        const double p = 0.01;
-        double min[2];
-        double max[2];
-        min[0] = rand_double() * 360.0 - 180.0;
-        min[1] = rand_double() * 180.0 - 90.0;
-        max[0] = min[0] + 360.0*p;
-        max[1] = min[1] + 180.0*p;
-        int res = 0;
-        rtree_search(tr, min, max, search_iter, &res);
-        // printf("%d\n", res);
-    });
-
-    bench("search-5%", 1000, {
-        const double p = 0.05;
-        double min[2];
-        double max[2];
-        min[0] = rand_double() * 360.0 - 180.0;
-        min[1] = rand_double() * 180.0 - 90.0;
-        max[0] = min[0] + 360.0*p;
-        max[1] = min[1] + 180.0*p;
-        int res = 0;
-        rtree_search(tr, min, max, search_iter, &res);
-    });
-
-    bench("search-10%", 1000, {
-        const double p = 0.10;
-        double min[2];
-        double max[2];
-        min[0] = rand_double() * 360.0 - 180.0;
-        min[1] = rand_double() * 180.0 - 90.0;
-        max[0] = min[0] + 360.0*p;
-        max[1] = min[1] + 180.0*p;
-        int res = 0;
-        rtree_search(tr, min, max, search_iter, &res);
-    });
-
-    bench("delete", N, {
-        double *point = &points[i*2];
-        rtree_delete(tr, point, point, (void*)(uintptr_t)(i));
-        assert(rtree_count(tr) == N-i-1);
-    });
-
-    double *points2 = (double *)xmalloc(N*2*sizeof(double));
+    RTREE_NUMTYPE *points2 = (RTREE_NUMTYPE *)xmalloc(N*RTREE_DIMS*sizeof(RTREE_NUMTYPE));
     for (int i = 0; i < N; i++) {
-        double *point = &points[i*2];
+        RTREE_NUMTYPE *point = &points[i*RTREE_DIMS];
         rtree_insert(tr, point, point, (void*)(uintptr_t)(i));
         assert(rtree_count(tr) == i+1);
-        double rsize = 0.01; // size of rectangle in degrees
-        points2[i*2+0] = points[i*2+0] + rand_double()*rsize - rsize/2;
-        points2[i*2+1] = points[i*2+1] + rand_double()*rsize - rsize/2;
+        if(is_float_point(RTREE_NUMTYPE)){
+            double rsize = 0.01; // size of rectangle in degrees
+            for (int d = 0; d < RTREE_DIMS; d++){
+                points2[i*RTREE_DIMS+d] = points2[i*RTREE_DIMS+d] + rand_double()*rsize - rsize/2;
+            }
+        }else{
+            int rsize = 2;
+            for (int d = 0; d < RTREE_DIMS; d++){
+                points2[i*RTREE_DIMS+d] = points2[i*RTREE_DIMS+d] + rand()*rsize - rsize/2;
+            }
+        }
+
     }
 
-    bench("replace", N, {
-        assert(rtree_count(tr) == N);
-        double *point = &points[i*2];
-        rtree_delete(tr, point, point, (void*)(uintptr_t)(i));
-        assert(rtree_count(tr) == N-1);
-        double *point2 = &points2[i*2];
-        rtree_insert(tr, point2, point2, (void*)(uintptr_t)(i));
-        assert(rtree_count(tr) == N);
-    });
+    bench("replace", N, replace(tr,points,points2,N));
 
     rtree_check(tr);
 
-
-    double *tmp = points;
+    RTREE_NUMTYPE *tmp = points;
     points = points2;
     points2 = tmp;
 
+    bench("search-item", N, search_item(tr,points,N));
+    bench("search-1%", N, search(tr,points,N,0.01));
+    bench("search-5%", N, search(tr,points,N,0.05));
+    bench("search-10%", N, search(tr,points,N,0.10));
 
-    bench("search-item", N, {
-        double *point = &points[i*2];
-        struct search_iter_one_context ctx = { 0 };
-        ctx.point = point;
-        ctx.data = (void *)(uintptr_t)(i);
-        rtree_search(tr, point, point, search_iter_one, &ctx);
-        assert(ctx.count == 1);
-    });
-
-    bench("search-1%", 1000, {
-        const double p = 0.01;
-        double min[2];
-        double max[2];
-        min[0] = rand_double() * 360.0 - 180.0;
-        min[1] = rand_double() * 180.0 - 90.0;
-        max[0] = min[0] + 360.0*p;
-        max[1] = min[1] + 180.0*p;
-        int res = 0;
-        rtree_search(tr, min, max, search_iter, &res);
-        // printf("%d\n", res);
-    });
-
-    bench("search-5%", 1000, {
-        const double p = 0.05;
-        double min[2];
-        double max[2];
-        min[0] = rand_double() * 360.0 - 180.0;
-        min[1] = rand_double() * 180.0 - 90.0;
-        max[0] = min[0] + 360.0*p;
-        max[1] = min[1] + 180.0*p;
-        int res = 0;
-        rtree_search(tr, min, max, search_iter, &res);
-    });
-
-    bench("search-10%", 1000, {
-        const double p = 0.10;
-        double min[2];
-        double max[2];
-        min[0] = rand_double() * 360.0 - 180.0;
-        min[1] = rand_double() * 180.0 - 90.0;
-        max[0] = min[0] + 360.0*p;
-        max[1] = min[1] + 180.0*p;
-        int res = 0;
-        rtree_search(tr, min, max, search_iter, &res);
-    });
     rtree_free(tr);
     xfree(points);
     xfree(points2);
@@ -396,7 +388,7 @@ void test_rand_bench(bool hilbert_ordered, int N) {
 
 int main() {
     int seed = getenv("SEED")?atoi(getenv("SEED")):time(NULL);
-    int N = getenv("N")?atoi(getenv("N")):1000000;
+    int N = getenv("N")?atoi(getenv("N")):10000;
     printf("seed=%d, count=%d\n", seed, N);
     srand(seed);
 

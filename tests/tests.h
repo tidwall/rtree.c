@@ -13,20 +13,151 @@
 #include <time.h>
 #include <assert.h>
 #include <ctype.h>
-#include "../rtree.h"
+#include "../rtree.c"
 
-#ifdef __clang__
-#pragma GCC diagnostic ignored "-Wcompound-token-split-by-macro"
+#define is_float_point(x) _Generic((x)0,       \
+        _Bool: 0, unsigned char:            0, \
+         char: 0, signed char:              0, \
+    short int: 0, unsigned short int:       0, \
+          int: 0, unsigned int:             0, \
+     long int: 0, unsigned long int:        0, \
+long long int: 0, unsigned long long int:   0, \
+        float: 1, double:                   1, \
+  long double: 1, char *:                   0, \
+       void *: 0, int *:                    0, \
+      default: 0) 
+
+
+#if defined(_MSC_VER)
+    #define DISABLE_WARNING_PUSH           __pragma(warning( push ))
+    #define DISABLE_WARNING_POP            __pragma(warning( pop )) 
+    #define DISABLE_WARNING(warningNumber) __pragma(warning( disable : warningNumber ))
+
+#elif defined(__GNUC__) || defined(__clang__)
+    #define DO_PRAGMA(X) _Pragma(#X)
+    #define DISABLE_WARNING_PUSH           DO_PRAGMA(GCC diagnostic push)
+    #define DISABLE_WARNING_POP            DO_PRAGMA(GCC diagnostic pop) 
+    #define DISABLE_WARNING(warningName)   DO_PRAGMA(GCC diagnostic ignored #warningName)    
+#else
+    #define DISABLE_WARNING_PUSH
+    #define DISABLE_WARNING_POP
+    #define DISABLE_WARNING(x)
 #endif
 
-#ifdef __GNUC__
-#pragma GCC diagnostic ignored "-Wpedantic"
-#endif
+DISABLE_WARNING(-Wcompound-token-split-by-macro)
+DISABLE_WARNING(-Wpedantic)
 
+#include <stdio.h>
 
-// private rtree functions
-bool rtree_check(struct rtree *tr);
-void rtree_write_svg(struct rtree *tr, const char *path);
+//////////////////
+// checker
+//////////////////
+
+static bool node_check_rect(const struct rect *rect, struct node *node) {
+    struct rect rect2 = node_rect_calc(node);
+    if (!rect_equals(rect, &rect2)){
+        fprintf(stderr, "invalid rect\n");
+        return false;
+    }
+    if (node->kind == BRANCH) {
+        for (int i = 0; i < node->count; i++) {
+            if (!node_check_rect(&node->rects[i], node->nodes[i])) {
+                return false;
+            }
+        }
+    }
+    return true;
+}
+
+static bool rtree_check_rects(const struct rtree *tr) {
+    if (tr->root) {
+        if (!node_check_rect(&tr->rect, tr->root)) return false;
+    }
+    return true;
+}
+
+static bool rtree_check_height(const struct rtree *tr) {
+    size_t height = 0;
+    struct node *node = tr->root;
+    while (node) {
+        height++;
+        if (node->kind == LEAF) break;
+        node = node->nodes[0];
+    }
+    if (height != tr->height) {
+        fprintf(stderr, "invalid height\n");
+        return false;
+    }
+    return true;
+}
+
+bool rtree_check(const struct rtree *tr) {
+    if (!rtree_check_rects(tr)) return false;
+    if (!rtree_check_height(tr)) return false;
+    return true;
+}
+
+static const double svg_scale = 20.0;
+static const char *strokes[] = { "black", "red", "green", "purple" };
+static const int nstrokes = 4;
+
+static void node_write_svg(const struct node *node, const struct rect *rect, 
+    FILE *f, int depth)
+{
+    bool point = rect->min[0] == rect->max[0] && rect->min[1] == rect->max[1];
+    if (node) {
+        if (node->kind == BRANCH) {
+            for (int i = 0; i < node->count; i++) {
+                node_write_svg(node->nodes[i], &node->rects[i], f, depth+1);
+            }
+        } else {
+            for (int i = 0; i < node->count; i++) {
+                node_write_svg(NULL, &node->rects[i], f, depth+1);
+            }
+        }
+    }
+    if (point) {
+        double w = (rect->max[0]-rect->min[0]+1/svg_scale)*svg_scale*10;
+        fprintf(f, 
+            "<rect x=\"%f\" y=\"%f\" width=\"%f\" height=\"%f\" "
+                "fill=\"%s\" fill-opacity=\"1\" "
+                "rx=\"3\" ry=\"3\"/>\n",
+            (rect->min[0])*svg_scale-w/2, 
+            (rect->min[1])*svg_scale-w/2,
+            w, w, 
+            strokes[depth%nstrokes]);
+    } else {
+        fprintf(f, 
+            "<rect x=\"%f\" y=\"%f\" width=\"%f\" height=\"%f\" "
+                "stroke=\"%s\" fill=\"%s\" "
+                "stroke-width=\"%d\" "
+                "fill-opacity=\"0\" stroke-opacity=\"1\"/>\n",
+            (rect->min[0])*svg_scale,
+            (rect->min[1])*svg_scale,
+            (rect->max[0]-rect->min[0]+1/svg_scale)*svg_scale,
+            (rect->max[1]-rect->min[1]+1/svg_scale)*svg_scale,
+            strokes[depth%nstrokes],
+            strokes[depth%nstrokes],
+            1);
+    }
+}
+
+// rtree_write_svg draws the R-tree to an SVG file. This is only useful with
+// small geospatial 2D dataset. 
+void rtree_write_svg(const struct rtree *tr, const char *path) {
+    FILE *f = fopen(path, "wb+");
+    fprintf(f, "<svg viewBox=\"%.0f %.0f %.0f %.0f\" " 
+        "xmlns =\"http://www.w3.org/2000/svg\">\n",
+        -190.0*svg_scale, -100.0*svg_scale,
+        380.0*svg_scale, 190.0*svg_scale);
+    fprintf(f, "<g transform=\"scale(1,-1)\">\n");
+    if (tr->root) {
+        node_write_svg(tr->root, &tr->rect, f, 0);
+    }
+    fprintf(f, "</g>\n");
+    fprintf(f, "</svg>\n");
+    fclose(f);
+}
 
 int64_t crand(void) {
     uint64_t seed = 0;
@@ -160,16 +291,26 @@ double rand_double() {
     return (double)rand() / ((double)RAND_MAX+1);
 }
 
-struct rect {
-    double min[2];
-    double max[2];
-};
-
-void fill_rand_rect(double coords[]) {
-    coords[0] = rand_double()*360-180;
-    coords[1] = rand_double()*180-90;
-    coords[2] = coords[0]+(rand_double()*2);
-    coords[3] = coords[1]+(rand_double()*2);
+void fill_rand_rect(RTREE_NUMTYPE *coords) {
+    if (is_float_point(RTREE_NUMTYPE)){
+        #if RTREE_DIMS == 2
+        coords[0] = rand_double()*360-180;
+        coords[1] = rand_double()*180-90;
+        coords[2] = coords[0]+(rand_double()*2);
+        coords[3] = coords[1]+(rand_double()*2);
+        #else
+        for (int d = 0; d < RTREE_DIMS; d++){
+            coords[d] = rand_double();
+            coords[d+RTREE_DIMS] = coords[d]+(rand_double());
+        }
+        #endif
+    }else{
+        for (int d = 0; d < RTREE_DIMS; d++){
+            coords[d] = rand()>>1;
+            coords[d+RTREE_DIMS] = coords[d]+(rand()>>1);
+        }
+    }
+    
 }
 
 struct rect rand_rect() {
@@ -202,7 +343,7 @@ struct find_one_context {
     int(*compare)(const void *a, const void *b);
 };
 
-bool find_one_iter(const double *min, const double *max, const void *data,
+bool find_one_iter(const RTREE_NUMTYPE *min, const RTREE_NUMTYPE *max, const void *data,
     void *udata)
 {
     (void)min; (void)max;
@@ -217,7 +358,7 @@ bool find_one_iter(const double *min, const double *max, const void *data,
     return true;
 }
 
-bool find_one(struct rtree *tr, const double min[], const double max[], 
+bool find_one(struct rtree *tr, const RTREE_NUMTYPE min[], const RTREE_NUMTYPE max[], 
     void *data, int(*compare)(const void *a, const void *b), void **found_data)
 {
     struct find_one_context ctx = { .target = data, .compare = compare };
@@ -260,7 +401,7 @@ char *rand_key(int nchars) {
 
 static void *oom_ptr = (void*)(uintptr_t)(intptr_t)-1;
 
-void *rtree_set(struct rtree *tr, const double *min, const double *max, 
+void *rtree_set(struct rtree *tr, const RTREE_NUMTYPE *min, const RTREE_NUMTYPE *max, 
     void *data)
 {
     void *prev = NULL;

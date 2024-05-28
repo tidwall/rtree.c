@@ -107,7 +107,7 @@ numeric coordinate type, and `void *` as the data type.
 The `rtree.c` and `rtree.h` files can be easily customized to change these
 settings.
 
-Please find the type parameters at the top of the `rtree.c` file:
+Please set the parameters globally or before `rtree.h` including. Otherwise default values will be set:
 
 ```c
 #define DATATYPE void * 
