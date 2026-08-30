@@ -102,4 +102,7 @@ bool rtree_delete_with_comparator(struct rtree *tr, const double *min,
 // Optionally, define RTREE_NOATOMICS to disbale all atomics.
 void rtree_opt_relaxed_atomics(struct rtree *tr);
 
+// rtree_rect returns the MBR.
+void rtree_rect(struct rtree *tr, double *min, double *max);
+
 #endif // RTREE_H
