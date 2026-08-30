@@ -835,6 +835,13 @@ void rtree_opt_relaxed_atomics(struct rtree *tr) {
     tr->relaxed = true;
 }
 
+void rtree_rect(struct rtree *tr, NUMTYPE *min, NUMTYPE *max) {
+    for (int i = 0; i < DIMS; i++) {
+        min[i] = tr->rect.min[i];
+        max[i] = tr->rect.max[i]; 
+    }
+}
+
 #ifdef TEST_PRIVATE_FUNCTIONS
 #include "tests/priv_funcs.h"
 #endif

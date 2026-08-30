@@ -232,7 +232,8 @@ void test_rtree_ops(void) {
         } else {
             // This first delete will not delete anything because the pointer
             // is invalid.
-            while (!rtree_delete(tr, min, max, data+1)){}
+            
+            while (!rtree_delete(tr, min, max, (void*)(((uintptr_t)data)+1))){}
             // This one will delete
             while (!rtree_delete(tr, min, max, data)){}
         }
