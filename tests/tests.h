@@ -178,6 +178,11 @@ struct rect rand_rect() {
     return rect;
 }
 
+bool feq(double a, double b) {
+    double c = fabs(a - b);
+    return c < 0.00000001;
+}
+
 // // struct btree *btree_new_for_test(size_t elsize, size_t max_items,
 // //     int (*compare)(const void *a, const void *b, void *udata),
 // //     void *udata)

@@ -180,7 +180,6 @@ bool iter_two(const double *min, const double *max, const void *data,
     return ctx->count < 2;
 }
 
-
 void test_rtree_ops(void) {
     int N = 100000;
     double *coords;
@@ -188,11 +187,17 @@ void test_rtree_ops(void) {
     for (int i = 0; i < N; i++) {
         fill_rand_rect(&coords[i*4]);
     }
+    double mbrmin[2];
+    double mbrmax[2];
     struct rtree *tr;
     while (!(tr = rtree_new_with_allocator(xmalloc, xfree))){}
     for (int i = 0; i < N; i++) {
         double *min = &coords[i*4+0];
         double *max = &coords[i*4+2];
+        mbrmin[0] = fmin(min[0], mbrmin[0]);
+        mbrmin[1] = fmin(min[1], mbrmin[1]);
+        mbrmax[0] = fmax(max[0], mbrmax[0]);
+        mbrmax[1] = fmax(max[1], mbrmax[1]);
         void *data = (void *)(uintptr_t)i;
         while (!rtree_insert(tr, min, max, data)){}
         assert(find_one(tr, min, max, data, NULL, NULL));
@@ -202,6 +207,13 @@ void test_rtree_ops(void) {
     assert(rtree_count(tr) == (size_t)N);
     assert(rtree_check(tr));
 
+    double mbrmin2[2];
+    double mbrmax2[2];
+    rtree_rect(tr, mbrmin2, mbrmax2);
+    assert(feq(mbrmin[0], mbrmin2[0]));
+    assert(feq(mbrmin[1], mbrmin2[1]));
+    assert(feq(mbrmax[0], mbrmax2[0]));
+    assert(feq(mbrmax[1], mbrmax2[1]));
 
     // scan all items
     struct iter_scan_all_ctx ctx0 = { 0 };
@@ -260,6 +272,16 @@ void test_rtree_various(void) {
     rtree_free(tr);
 }
 
+void test_rtree_null_island(void) {
+    struct rtree *tr = rtree_new();
+    assert(tr);
+    double null_island[2] = { 0, 0 };
+    for (int i = 0; i < 1000; i++) {
+        rtree_insert(tr, null_island, null_island, (void*)((intptr_t)(i)));
+    }
+    rtree_free(tr);
+}
+
 
 int main(int argc, char **argv) {
     seedrand();
@@ -267,6 +289,8 @@ int main(int argc, char **argv) {
     do_chaos_test(test_rtree_cities_svg);
     do_chaos_test(test_rtree_predef_svg);
     do_test(test_rtree_various);
+    do_test(test_rtree_null_island);
+
 
     return 0;
 }
