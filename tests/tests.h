@@ -183,6 +183,15 @@ bool feq(double a, double b) {
     return c < 0.00000001;
 }
 
+double min0(double x, double y) {
+    return x < y ? x : y;
+}
+
+double max0(double x, double y) {
+    return x > y ? x : y;
+}
+
+
 // // struct btree *btree_new_for_test(size_t elsize, size_t max_items,
 // //     int (*compare)(const void *a, const void *b, void *udata),
 // //     void *udata)

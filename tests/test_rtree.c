@@ -194,10 +194,10 @@ void test_rtree_ops(void) {
     for (int i = 0; i < N; i++) {
         double *min = &coords[i*4+0];
         double *max = &coords[i*4+2];
-        mbrmin[0] = fmin(min[0], mbrmin[0]);
-        mbrmin[1] = fmin(min[1], mbrmin[1]);
-        mbrmax[0] = fmax(max[0], mbrmax[0]);
-        mbrmax[1] = fmax(max[1], mbrmax[1]);
+        mbrmin[0] = min0(min[0], mbrmin[0]);
+        mbrmin[1] = min0(min[1], mbrmin[1]);
+        mbrmax[0] = max0(max[0], mbrmax[0]);
+        mbrmax[1] = max0(max[1], mbrmax[1]);
         void *data = (void *)(uintptr_t)i;
         while (!rtree_insert(tr, min, max, data)){}
         assert(find_one(tr, min, max, data, NULL, NULL));
