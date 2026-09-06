@@ -5,7 +5,7 @@
 #include <string.h>
 #include <math.h>
 #include <stdbool.h>
-#include "rtree.h"
+#include <stdlib.h>
 
 ////////////////////////////////
 
@@ -17,7 +17,27 @@
 ////////////////////////////////
 
 #ifdef RTREE_USEPATHHINT
-#define USE_PATHHINT
+#define USEPATHHINT
+#endif
+
+#ifdef RTREE_MAXITEMS
+#undef MAXITEMS
+#define MAXITEMS RTREE_MAXITEMS
+#endif
+
+#ifdef RTREE_DATATYPE
+#undef DATATYPE
+#define DATATYPE RTREE_DATATYPE
+#endif
+
+#ifdef RTREE_DIMS
+#undef DIMS
+#define DIMS RTREE_DIMS
+#endif
+
+#ifdef RTREE_NUMTYPE
+#undef NUMTYPE
+#define NUMTYPE RTREE_NUMTYPE
 #endif
 
 #ifdef RTREE_MAXITEMS
@@ -86,7 +106,7 @@ struct rtree {
     struct node *root;
     size_t count;
     size_t height;
-#ifdef USE_PATHHINT
+#ifdef USEPATHHINT
     int path_hint[16];
 #endif
     void *(*malloc)(size_t);
@@ -356,7 +376,7 @@ static int node_choose(struct rtree *tr, const struct node *node,
     const struct rect *rect, int depth)
 {
     (void)tr, (void)depth;
-#ifdef USE_PATHHINT
+#ifdef USEPATHHINT
     int h = tr->path_hint[depth];
     if (h < node->count) {
         if (rect_contains(&node->rects[h], rect)) {
@@ -367,7 +387,7 @@ static int node_choose(struct rtree *tr, const struct node *node,
     // Take a quick look for the first node that contain the rect.
     for (int i = 0; i < node->count; i++) {
         if (rect_contains(&node->rects[i], rect)) {
-#ifdef USE_PATHHINT
+#ifdef USEPATHHINT
             tr->path_hint[depth] = i;
 #endif
             return i;
@@ -375,7 +395,7 @@ static int node_choose(struct rtree *tr, const struct node *node,
     }
     // Fallback to using che "choose least enlargment" algorithm.
     int i = node_choose_least_enlargement(node, rect);
-#ifdef USE_PATHHINT
+#ifdef USEPATHHINT
     tr->path_hint[depth] = i;
 #endif
     return i;
@@ -647,7 +667,7 @@ static bool node_delete(struct rtree *tr, struct rect *nr, struct node *node,
         return true;
     }
     int h = 0;
-#ifdef USE_PATHHINT
+#ifdef USEPATHHINT
     h = tr->path_hint[depth];
     if (h < node->count) {
         if (rect_contains(&node->rects[h], ir)) {
@@ -678,7 +698,7 @@ static bool node_delete(struct rtree *tr, struct rect *nr, struct node *node,
         if (!*removed) {
             continue;
         }
-#ifdef USE_PATHHINT
+#ifdef USEPATHHINT
     removed:
 #endif
         if (node->nodes[h]->count == 0) {
@@ -691,7 +711,7 @@ static bool node_delete(struct rtree *tr, struct rect *nr, struct node *node,
             *shrunk = true;
             return true;
         }
-#ifdef USE_PATHHINT
+#ifdef USEPATHHINT
         tr->path_hint[depth] = h;
 #endif
         if (*shrunk) {
