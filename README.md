@@ -1,4 +1,4 @@
-**This project has been archived. Please check out [btree.h](https://github.com/tidwall/rtree.h) for a fitter, happier, more productive R-tree.**
+**This project has been archived. Please check out [rtree.h](https://github.com/tidwall/rtree.h) for a fitter, happier, more productive R-tree.**
 
 # rtree.c
 
