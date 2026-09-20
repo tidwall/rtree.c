@@ -1,3 +1,5 @@
+**This project has been archived. Please check out [btree.h](https://github.com/tidwall/rtree.h) for a fitter, happier, more productive R-tree.**
+
 # rtree.c
 
 An [R-tree](https://en.wikipedia.org/wiki/R-tree) implementation in C. 
